@@ -1,0 +1,522 @@
+`timescale 1ns/1ps
+
+module header_capture_testbench;
+
+	localparam BITS_PER_BEAT = 40;
+	localparam HEADER_SIZE = 112;
+	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
+	localparam BYTES_PER_HEADER = HEADER_SIZE/8;
+	localparam BEATS_PER_BURST = 16;
+	localparam BLANK_BYTES = 12;
+	localparam PACKET_BYTE_COUNT = BEATS_PER_BURST * BYTES_PER_BEAT;
+	localparam [47:0] SRC_MAC_ADDRESS = 48'h001122334455;
+	localparam [47:0] DEST_MAC_ADDRESS = 48'h554433221100;
+	localparam [15:0] ETH_TYPE = 16'h0800;
+	localparam PRBS_SIZE = 32;
+	localparam PRBS_LEFT_OVER = ((BITS_PER_BEAT - HEADER_SIZE) % 32);
+	localparam TKEEP_LEFT_OVER = BYTES_PER_BEAT - BYTES_PER_HEADER;
+	
+	localparam real header_size_real = HEADER_SIZE;
+	localparam real bits_per_beat_real = BITS_PER_BEAT;
+	localparam real header_leftover_real = $ceil(header_size_real/bits_per_beat_real) * bits_per_beat_real - header_size_real;
+	localparam real header_leftover_real_bytes = header_leftover_real/8;
+	
+	localparam integer header_leftover_int = header_leftover_real;
+	localparam integer header_leftover_int_bytes = header_leftover_real_bytes;
+	
+	localparam real bytes_per_header_real = BYTES_PER_HEADER;
+	localparam real bytes_per_beat_real = BYTES_PER_BEAT;
+	localparam real header_beat_count_floor_real = $floor(bytes_per_header_real/bytes_per_beat_real)*bytes_per_beat_real;
+	localparam real header_beat_count_ceil_real = $ceil(bytes_per_header_real/bytes_per_beat_real)*bytes_per_beat_real;
+	localparam integer header_beat_count_floor_int = header_beat_count_floor_real;
+	localparam integer header_beat_count_ceil_int = header_beat_count_ceil_real;
+
+	wire tready_out;
+	reg tvalid_in;
+	reg [BITS_PER_BEAT-1:0] tdata_in;
+	reg tlast_in;
+	reg [BITS_PER_BEAT/8-1:0] tkeep_in;
+	reg tready_in;
+	wire tvalid_out;
+	wire [BITS_PER_BEAT-1:0] tdata_out;
+	wire tlast_out;
+	wire [BITS_PER_BEAT/8-1:0] tkeep_out;
+	wire [HEADER_SIZE-1:0] header_data;
+	
+	wire [31:0] header_data_32bit;
+	assign header_data_32bit = 32'h01234567;
+	wire [47:0] source_mac_address;
+	wire [47:0] destination_mac_address;
+	wire [15:0] ethernet_type;
+	
+	wire [127:0] header_data_112bit;
+	integer beat_counter;
+	reg [PRBS_SIZE-1:0] prbs_register;
+	reg [PRBS_SIZE-1:0] prbs_verifier;
+	reg data_valid;
+	
+	localparam SETUP_DATA_STREAM = 8'b00000001;
+	localparam FINISH_HEADER = 8'b00000010;
+	localparam WAIT_FOR_READY = 8'b00000100;
+	localparam END_OF_BUS_TRANSACTION = 8'b00001000;
+	localparam CHECK_HEADER_CAPTURE_OUTPUT = 8'b00010000;
+	
+	reg [7:0] header_capture_state;
+	integer i;
+	reg [BITS_PER_BEAT-1:0] tdata_shift_register;
+	reg [BYTES_PER_BEAT-1:0] tkeep_leftover;
+	integer packet_byte_counter;
+	integer header_byte_counter;
+	reg [HEADER_SIZE-1:0] header_shift_register;
+
+	// Polynomial = x^32 + x^22 + x^2 + x^1 + 1
+	function [31:0] prbs_pattern_generator;
+		input data_enable;
+		input [31:0] seed_value;
+		reg [31:0] lfsr_data;
+		reg [31:0] lfsr_bit;
+		
+		begin
+			if (data_enable) begin
+				lfsr_bit	= (seed_value ^ (seed_value >> 10) ^ (seed_value >> 30) ^ (seed_value >> 31)) & 1'b1;
+				lfsr_data	= (seed_value >> 1) | (lfsr_bit << 31);
+			end
+			
+			prbs_pattern_generator = lfsr_data;
+		end
+	endfunction
+	
+	// Create an array of 32 bit PRBS data
+	function [BITS_PER_BEAT-1:0] prbs_beat_array;
+		input [31:0] previous_prbs_input;
+		integer i;
+		reg [BITS_PER_BEAT-1:0] shift_register;
+		reg [31:0] current_prbs_data;
+		
+		begin
+			shift_register[(BITS_PER_BEAT-1)-:32] = prbs_pattern_generator(1'b1, previous_prbs_input);
+			current_prbs_data = shift_register[(BITS_PER_BEAT-1)-:32];
+			
+			for (i = 0; i < (BITS_PER_BEAT/32)-1; i = i + 1) begin
+				shift_register	= shift_register >> 32;
+				shift_register[(BITS_PER_BEAT-1)-:32] = prbs_pattern_generator(1'b1, current_prbs_data);
+				current_prbs_data = shift_register[(BITS_PER_BEAT-1)-:32];
+			end
+			
+			prbs_beat_array = shift_register;
+		end
+	endfunction
+	
+	function [BITS_PER_BEAT*BEATS_PER_BURST-1:0] prbs_data_array;
+		integer i;
+		input [31:0] previous_prbs_input;
+		reg [BITS_PER_BEAT*BEATS_PER_BURST-1:0] shift_register;
+		reg [31:0] current_prbs_data;
+		
+		begin
+			shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:32] = prbs_pattern_generator(1'b1, previous_prbs_input);
+			current_prbs_data = shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:32];
+
+			for (i = 0; i < (BITS_PER_BEAT*BEATS_PER_BURST)/PRBS_SIZE-1; i = i + 1) begin
+				shift_register	= shift_register >> PRBS_SIZE;
+				shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:PRBS_SIZE] = prbs_pattern_generator(1'b1, current_prbs_data);
+				current_prbs_data = shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:PRBS_SIZE];
+			end
+			
+			prbs_data_array = shift_register;
+		end
+	endfunction
+	
+	// Used to perform byte swapping
+	byte_swap #(.WIDTH(48))	src_mac (.data_in(SRC_MAC_ADDRESS),	.data_out(source_mac_address));	
+	byte_swap #(.WIDTH(48))	dest_mac (.data_in(DEST_MAC_ADDRESS), .data_out(destination_mac_address));	
+	byte_swap #(.WIDTH(16))	type_len (.data_in(ETH_TYPE), .data_out(ethernet_type));	
+
+	assign header_data_112bit = {ethernet_type, destination_mac_address, source_mac_address};
+
+	reg clock;
+	reg reset;
+
+	header_capture #(BITS_PER_BEAT, HEADER_SIZE) dut (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, tkeep_in, tready_in, tvalid_out, tdata_out, tlast_out, tkeep_out, header_data);
+	
+	initial begin
+		clock = 1'b0;
+		reset = 1'b1;
+	end
+
+	initial begin
+		#1000 reset = 1'b0;
+	end
+	
+	always begin
+		#5 clock = ~clock;
+	end
+
+	generate
+		if (BITS_PER_BEAT == HEADER_SIZE) begin : same_size
+			reg [HEADER_SIZE-1:0] tdata_leftover;
+		
+			// Send random data
+			always @(posedge clock or reset) begin
+				if (reset) begin
+					header_capture_state	<= SETUP_DATA_STREAM;
+					tvalid_in				<= 1'b0;
+					tdata_in				<= 0;
+					tlast_in				<= 1'b0;
+					tkeep_in				<= 0;
+					tready_in				<= 1'b0;
+					prbs_register			<= 32'hFFFFFFFF;
+					prbs_verifier			<= 32'hFFFFFFFF;
+					beat_counter			<= 0;
+					data_valid				<= 1'b0;
+				end
+				else begin
+					case (header_capture_state)
+						SETUP_DATA_STREAM:
+						begin
+							tvalid_in			<= 1'b1;
+							tdata_in			<= header_data_32bit;
+							tlast_in			<= 1'b0;
+							tkeep_in			<= 0;
+							tready_in			<= 1'b0;
+
+							if (tready_out) begin	// Already captured the header
+								beat_counter		<= beat_counter + 1;
+								prbs_register		= prbs_pattern_generator(1'b1, prbs_register);
+								tdata_in			<= prbs_register;
+							end
+							else begin
+								beat_counter		<= 0;
+		//						prbs_register		<= 32'hFFFFFFFF;
+							end
+
+							header_capture_state	<= WAIT_FOR_READY;
+						end
+						WAIT_FOR_READY:
+						begin
+							if (tready_out) begin
+								if (beat_counter < BEATS_PER_BURST-2) begin
+									prbs_register		= prbs_pattern_generator(1'b1, prbs_register);
+									tdata_in			<= prbs_register;
+									tvalid_in			<= 1'b1;
+									tlast_in			<= 1'b0;
+									tkeep_in			<= 32'hFFFFFFFF;
+									beat_counter		<= beat_counter + 1;
+								end
+								else if (beat_counter < BEATS_PER_BURST-1) begin
+									prbs_register		= prbs_pattern_generator(1'b1, prbs_register);
+									tdata_in			<= prbs_register;
+									tvalid_in			<= 1'b1;
+									tlast_in			<= 1'b1;
+									tkeep_in			<= 32'hFFFFFFFF;
+									beat_counter		<= beat_counter + 1;
+									header_capture_state<= END_OF_BUS_TRANSACTION;
+								end
+							end
+						end
+						END_OF_BUS_TRANSACTION:
+						begin
+							tdata_in			<= 0;
+							tvalid_in			<= 1'b0;
+							tlast_in			<= 1'b0;
+							tkeep_in			<= 0;
+
+							// Enable data out now to check the operation of the FIFO
+							tready_in			<= 1'b1;
+							header_capture_state<= CHECK_HEADER_CAPTURE_OUTPUT;
+						end
+						CHECK_HEADER_CAPTURE_OUTPUT:
+						begin
+							if (tvalid_out) begin
+								prbs_verifier	= prbs_pattern_generator(1'b1, prbs_verifier);
+
+								if (tdata_out == prbs_verifier) begin
+									data_valid		<= 1'b1;
+								end
+								else begin
+									data_valid		<= 1'b0;
+								end
+
+								if (tlast_out) begin
+									header_capture_state	<= SETUP_DATA_STREAM;
+								end
+							end
+						end
+						default : header_capture_state	<= SETUP_DATA_STREAM;
+					endcase
+				end
+			end
+		end
+		else if (BITS_PER_BEAT > HEADER_SIZE) begin : large_beat_size
+			reg [HEADER_SIZE-1:0] tdata_leftover;
+			reg [BYTES_PER_BEAT-1:0] tkeep_shift_register;
+			reg [BITS_PER_BEAT-1:0] verifier_shift_register;
+		
+			always @(posedge clock or reset) begin
+				if (reset) begin
+					header_capture_state	<= SETUP_DATA_STREAM;
+					tvalid_in				<= 1'b0;
+					tdata_in				<= 0;
+					tlast_in				<= 1'b0;
+					tkeep_in				<= 0;
+					tready_in				<= 1'b0;
+					prbs_register			<= 32'hFFFFFFFF;
+					prbs_verifier			<= 32'hFFFFFFFF;
+					beat_counter			<= 0;
+					data_valid				<= 1'b0;
+					tdata_shift_register	= 0;
+					tkeep_shift_register	<= 0;
+					tdata_leftover			<= 0;
+					tkeep_leftover			<= 0;
+					packet_byte_counter		<= 0;
+					verifier_shift_register	<= 0;
+				end
+				else begin
+					case (header_capture_state)
+						SETUP_DATA_STREAM:
+						begin
+							tdata_shift_register		= prbs_beat_array(prbs_register);
+							prbs_register				= tdata_shift_register[BITS_PER_BEAT-1-:32];
+							tdata_in[HEADER_SIZE-1:0]	<= header_data_112bit;
+							tdata_in[BITS_PER_BEAT-1:HEADER_SIZE]	<= tdata_shift_register[BITS_PER_BEAT-HEADER_SIZE-1:0];
+							tkeep_shift_register[BYTES_PER_HEADER-1:0]	= {BYTES_PER_HEADER{8'hFF}};
+							tkeep_shift_register[BYTES_PER_BEAT-1:BYTES_PER_HEADER] = {TKEEP_LEFT_OVER{8'hFF}};
+							tdata_leftover				<= tdata_shift_register[BITS_PER_BEAT-1:BITS_PER_BEAT-HEADER_SIZE];
+							tkeep_leftover				<= {{TKEEP_LEFT_OVER{8'h00}}, {BYTES_PER_HEADER{8'hFF}}};
+							
+							tvalid_in					<= 1'b1;
+							tlast_in					<= 1'b0;
+							tkeep_in					<= {BYTES_PER_BEAT{8'hFF}};
+							tready_in					<= 1'b0;
+							packet_byte_counter			<= BYTES_PER_BEAT - BYTES_PER_HEADER;
+							header_capture_state		<= WAIT_FOR_READY;
+						end
+						WAIT_FOR_READY:
+						begin
+							if (tready_out) begin
+//								tdata_shift_register		= tdata_shift_register >> (BITS_PER_BEAT-HEADER_SIZE);
+								packet_byte_counter			<= packet_byte_counter + BYTES_PER_BEAT;
+								
+//								if (beat_counter < BEATS_PER_BURST-2) begin
+								if (packet_byte_counter < (PACKET_BYTE_COUNT-BYTES_PER_BEAT)) begin
+									tdata_shift_register= prbs_beat_array(prbs_register);
+									prbs_register		= tdata_shift_register[BITS_PER_BEAT-1-:32];
+									tdata_in[HEADER_SIZE-1:0]	<= tdata_leftover;
+									tdata_in[BITS_PER_BEAT-1:HEADER_SIZE]	<= tdata_shift_register[(BITS_PER_BEAT-HEADER_SIZE)-1:0];
+									tvalid_in			<= 1'b1;
+									tlast_in			<= 1'b0;
+									tkeep_in			<= {BYTES_PER_BEAT{1'b1}};
+									tdata_leftover		<= tdata_shift_register[BITS_PER_BEAT-1:BITS_PER_BEAT-HEADER_SIZE];
+									beat_counter		<= beat_counter + 1;
+								end 
+								else begin
+//								else if (beat_counter < BEATS_PER_BURST-1) begin
+									tdata_in[HEADER_SIZE-1:0]	<= tdata_leftover;
+									tdata_in[BITS_PER_BEAT-1:HEADER_SIZE]	<= {TKEEP_LEFT_OVER{8'h00}};
+									tvalid_in			<= 1'b1;
+									tlast_in			<= 1'b1;
+									tkeep_in			<= {{TKEEP_LEFT_OVER{1'b0}}, {BYTES_PER_HEADER{1'b1}}};
+									beat_counter		<= beat_counter + 1;
+									header_capture_state<= END_OF_BUS_TRANSACTION;
+								end
+							end
+						end
+						END_OF_BUS_TRANSACTION:
+						begin
+							tdata_in			<= 0;
+							tvalid_in			<= 1'b0;
+							tlast_in			<= 1'b0;
+							tkeep_in			<= 0;
+
+							// Enable data out now to check the operation of the FIFO
+							tready_in				<= 1'b1;
+							verifier_shift_register	= prbs_beat_array(prbs_verifier);
+							prbs_verifier			= verifier_shift_register[BITS_PER_BEAT-1-:32];
+							header_capture_state	<= CHECK_HEADER_CAPTURE_OUTPUT;
+						end
+						CHECK_HEADER_CAPTURE_OUTPUT:
+						begin
+							if (tvalid_out == 1'b1) begin
+								if (tdata_out == verifier_shift_register) begin
+									data_valid				<= 1'b1;
+								end
+								else begin
+									data_valid				<= 1'b0;
+								end
+								
+								if (!tlast_out) begin
+									verifier_shift_register	= prbs_beat_array(prbs_verifier);
+									prbs_verifier			= verifier_shift_register[BITS_PER_BEAT-1-:32];
+								end
+							end
+							
+							if (tlast_out) begin
+								beat_counter			<= 0;
+								header_capture_state	<= SETUP_DATA_STREAM;
+							end
+						end
+						default : header_capture_state	<= SETUP_DATA_STREAM;
+					endcase
+				end
+			end
+		end
+		else if (((HEADER_SIZE % BITS_PER_BEAT) != 0) && (BITS_PER_BEAT > PRBS_SIZE)) begin : medium_data_size_uneven
+			reg [PRBS_SIZE-header_leftover_int-1:0] tdata_leftover;
+			reg [BITS_PER_BEAT*BEATS_PER_BURST-1:0] prbs_shift_register;
+			reg [(BITS_PER_BEAT*BEATS_PER_BURST)/8-1:0] tkeep_shift_register;
+			reg [BITS_PER_BEAT*BEATS_PER_BURST-1:0] verifier_shift_register;
+			
+			always @(posedge clock or reset) begin
+				if (reset) begin
+					header_capture_state	<= SETUP_DATA_STREAM;
+					tvalid_in				<= 1'b0;
+					tdata_in				<= 0;
+					tlast_in				<= 1'b0;
+					tkeep_in				<= 0;
+					tready_in				<= 1'b0;
+					prbs_register			<= 32'hFFFFFFFF;
+					prbs_verifier			<= 32'hFFFFFFFF;
+					beat_counter			<= 0;
+					data_valid				<= 1'b0;
+					tdata_leftover			<= 0;
+					tkeep_leftover			<= 0;
+					header_shift_register	<= 0;
+					packet_byte_counter		<= 0;
+					header_byte_counter		<= 0;
+					prbs_shift_register		<= 0;
+					tkeep_shift_register	<= 0;
+				end
+				else begin
+					case (header_capture_state)
+						SETUP_DATA_STREAM:
+						begin
+							prbs_shift_register		= prbs_data_array(prbs_register);
+							prbs_register			= prbs_shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:PRBS_SIZE];
+							tkeep_shift_register	<= {((BITS_PER_BEAT*BEATS_PER_BURST)/8){1'b1}};
+							tdata_in				<= header_data_112bit[BITS_PER_BEAT-1:0];
+							tvalid_in				<= 1'b1;
+							tlast_in				<= 1'b0;
+							tkeep_in				<= {BYTES_PER_BEAT{8'hFF}};
+							tready_in				<= 1'b0;
+							tdata_leftover			<= 0;
+							tkeep_leftover			<= 0;
+							header_byte_counter		<= header_byte_counter + BYTES_PER_BEAT;
+							header_shift_register	<= header_data_112bit >> BITS_PER_BEAT;
+							header_capture_state	<= FINISH_HEADER;
+						end
+						FINISH_HEADER:
+						begin
+							if (tready_out) begin
+								if (header_byte_counter < header_beat_count_floor_int) begin
+									tdata_in				<= header_shift_register[BITS_PER_BEAT-1:0];
+									tvalid_in				<= 1'b1;
+									tlast_in				<= 1'b0;
+									tkeep_in				<= {BYTES_PER_BEAT{1'b1}};
+									tready_in				<= 1'b0;
+									header_byte_counter		<= header_byte_counter + BYTES_PER_BEAT;
+									header_shift_register	<= header_shift_register >> BITS_PER_BEAT;
+								end
+								else if (packet_byte_counter == 0) begin
+									tdata_in				<= {prbs_shift_register[header_leftover_int-1:0], header_shift_register[BITS_PER_BEAT-header_leftover_int-1:0]};
+									prbs_shift_register		<= prbs_shift_register >> header_leftover_int;
+									tkeep_shift_register	<= tkeep_shift_register >> (header_leftover_int/8);
+									tvalid_in				<= 1'b1;
+									tlast_in				<= 1'b0;
+									tkeep_in				<= {tkeep_shift_register[header_leftover_int/8:0], {((BITS_PER_BEAT-header_leftover_int)/8){1'b1}}};
+									tready_in				<= 1'b0;
+									tdata_leftover			<= tdata_shift_register[(BITS_PER_BEAT-1)-:(PRBS_SIZE-header_leftover_int)];
+									tkeep_leftover			<= {BYTES_PER_BEAT{1'b1}};
+									packet_byte_counter		<= packet_byte_counter + header_leftover_int/8;
+								end
+								else if (packet_byte_counter < PACKET_BYTE_COUNT-BYTES_PER_BEAT) begin
+									tdata_in				<= prbs_shift_register[BITS_PER_BEAT-1:0];
+									prbs_shift_register		<= prbs_shift_register >> BITS_PER_BEAT;
+									tkeep_shift_register	<= tkeep_shift_register >> BYTES_PER_BEAT;
+									tvalid_in				<= 1'b1;
+									tlast_in				<= 1'b0;
+									tkeep_in				<= tkeep_shift_register[BYTES_PER_BEAT-1:0];
+									tready_in				<= 1'b0;
+									tdata_leftover			<= tdata_shift_register[(BITS_PER_BEAT-1)-:(PRBS_SIZE-header_leftover_int)];
+									tkeep_leftover			<= {BYTES_PER_BEAT{1'b1}};
+									packet_byte_counter		<= packet_byte_counter + BYTES_PER_BEAT;
+								end
+								else begin
+									tdata_in				<= prbs_shift_register[BITS_PER_BEAT-1:0];
+									tvalid_in				<= 1'b1;
+									tlast_in				<= 1'b1;
+									tkeep_in				<= tkeep_shift_register[BYTES_PER_BEAT-1:0];
+									tready_in				<= 1'b0;
+									header_capture_state	<= END_OF_BUS_TRANSACTION;
+								end
+							end
+						end
+						END_OF_BUS_TRANSACTION:
+						begin
+							tdata_in			<= 0;
+							tvalid_in			<= 1'b0;
+							tlast_in			<= 1'b0;
+							tkeep_in			<= 0;
+
+							// Enable data out now to check the operation of the FIFO
+							tready_in				<= 1'b1;
+							verifier_shift_register	= prbs_data_array(prbs_verifier);
+							prbs_verifier			= verifier_shift_register[(BITS_PER_BEAT*BEATS_PER_BURST-1)-:32];
+							header_capture_state	<= CHECK_HEADER_CAPTURE_OUTPUT;
+						end
+						CHECK_HEADER_CAPTURE_OUTPUT:
+						begin
+							if (tvalid_out == 1'b1) begin
+								if (tdata_out == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
+									data_valid		<= 1'b1;
+								end
+								else begin
+									data_valid		<= 1'b0;
+								end
+								
+								verifier_shift_register		<= verifier_shift_register >> BITS_PER_BEAT;
+							end
+							
+							if (tlast_out) begin
+								packet_byte_counter		<= 0;
+								header_byte_counter		<= 0;
+								header_capture_state	<= SETUP_DATA_STREAM;
+							end
+						end
+						default : header_capture_state	<= SETUP_DATA_STREAM;
+					endcase
+				end
+			end
+		end
+		else if (((HEADER_SIZE % BITS_PER_BEAT) != 0) && (BITS_PER_BEAT <= PRBS_SIZE)) begin : small_data_size_uneven
+		
+		end
+		else begin : small_data_size_even
+		
+		end
+	endgenerate
+endmodule
+
+module byte_swap #(parameter WIDTH = 8) // Declare the parameter with a default value
+(
+	input wire [WIDTH-1:0] data_in,
+	output wire [WIDTH-1:0] data_out
+);
+
+    // The function uses the module's parameter 'WIDTH'
+    function [WIDTH-1:0] parametizable_byte_swap (input [WIDTH-1:0] input_data);
+    	integer i;
+    	reg [WIDTH-1:0] shift_register;
+    	
+        begin
+       		shift_register = input_data;
+       		
+        	for (i = 0; i < WIDTH/8; i = i + 1) begin
+        		parametizable_byte_swap[i*8+:8] = shift_register[WIDTH-1:WIDTH-8];
+        		shift_register = shift_register << 8;
+        	end
+        end
+    endfunction
+
+    // Use the function
+    assign data_out = parametizable_byte_swap(data_in);
+endmodule
