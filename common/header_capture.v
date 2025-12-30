@@ -4,7 +4,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam BYTES_PER_HEADER = HEADER_SIZE/8;
-	localparam BACK_PRESSURE_DEPTH = 2048*8;
+	localparam BACK_PRESSURE_DEPTH = 32;
 	localparam CONTROL_DATA_SIZE = BYTES_PER_BEAT + 2;
 
 	localparam real header_size_real = HEADER_SIZE;
@@ -14,6 +14,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	localparam KEEP_LEFTOVER = DATA_IN_LEFTOVER/8;
 	localparam DATA_IN_TRUNCATED = BITS_PER_BEAT - DATA_IN_LEFTOVER;
 	localparam KEEP_IN_TRUNCATED = DATA_IN_TRUNCATED/8;
+	localparam READ_LATENCY = 4;
 
 	input clock;
 	input reset;
@@ -34,8 +35,16 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	localparam [7:0] TRANSMIT_REMAINING_DATA = 8'b00000100;
 	localparam [7:0] WAIT_FOR_END_OF_DATA = 8'b00001000;
 	localparam [7:0] TRANSMIT_EXTRA_BEAT = 8'b00010000;
-	
+
 	reg [7:0] header_state;
+	
+	localparam [3:0] WAIT_FOR_FIFO_READY = 4'h1;
+	localparam [3:0] WAIT_FOR_OUTPUT_READY = 4'h2;
+	localparam [3:0] EMPTY_SHIFT_REGISTERS = 4'h4;
+	localparam [3:0] END_OF_TRANSMIT = 4'h8;
+	
+	reg [3:0] capture_output_state;
+	
 	reg fifo_write_enable;
 	reg fifo_read_enable;
 	reg [BITS_PER_BEAT-1:0] fifo_data_in;
@@ -50,7 +59,10 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	wire fifo_control_full;
 	integer byte_counter;
 	integer header_byte_counter;
-
+	reg [READ_LATENCY*BITS_PER_BEAT-1:0] data_shift_register;
+	reg [READ_LATENCY*CONTROL_DATA_SIZE-1:0] control_shift_register;
+	integer fifo_read_counter;
+	
 	generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
 	generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 	
@@ -70,14 +82,12 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 					header_data			<= 0;
 					fifo_write_enable	<= 1'b0;
 					fifo_data_in		<= 0;
-					fifo_read_enable	<= 1'b0;
 				end
 				else begin
 					case (header_state)
 						WAIT_FOR_DATA:
 						begin
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							
@@ -93,7 +103,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						begin
 							header_data			<= tdata_in;
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							header_state		<= TRANSMIT_REMAINING_DATA;
@@ -101,7 +110,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						TRANSMIT_REMAINING_DATA:
 						begin
 							fifo_write_enable	<= tvalid_in;
-							fifo_read_enable	<= tready_in;
 							fifo_data_in		<= tdata_in;
 							fifo_control_in		<= {tvalid_in, tlast_in, tkeep_in};
 							
@@ -117,11 +125,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 							fifo_control_in		<= 0;
 							
 							if (fifo_data_empty && fifo_control_empty) begin
-								fifo_read_enable	<= 1'b0;
 								header_state		<= WAIT_FOR_DATA;
-							end
-							else begin
-								fifo_read_enable	<= tready_in;
 							end
 						end
 						default : header_state		<= WAIT_FOR_DATA;
@@ -130,6 +134,16 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 			end
 			
 			always @(posedge clock) begin
+				if ((!fifo_data_empty) && (!fifo_data_valid)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else if ((!fifo_data_empty) && (tready_in)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else begin
+					fifo_read_enable	<= 1'b0;
+				end
+					
 				if (tready_in && (fifo_data_valid && fifo_control_valid)) begin
 					tvalid_out		<= fifo_control_out[CONTROL_DATA_SIZE-1];
 					tdata_out		<= fifo_data_out;
@@ -156,7 +170,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 					header_data			<= 0;
 					fifo_write_enable	<= 1'b0;
 					fifo_data_in		<= 0;
-					fifo_read_enable	<= 1'b0;
 					leftover_tdata		<= 0;
 					leftover_tkeep		<= 0;
 				end
@@ -165,7 +178,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						WAIT_FOR_DATA:
 						begin
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							
@@ -181,7 +193,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						begin
 							header_data			<= tdata_in[HEADER_SIZE-1:0];
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							leftover_tdata		<= tdata_in[BITS_PER_BEAT-1:HEADER_SIZE];
@@ -191,7 +202,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						TRANSMIT_REMAINING_DATA:
 						begin
 //							header_data			<= {tdata_in[HEADER_SIZE-1:0], leftover_tdata};
-							fifo_read_enable	<= tready_in;
 							leftover_tdata		<= tdata_in[BITS_PER_BEAT-1:HEADER_SIZE];
 							leftover_tkeep		<= tkeep_in[BITS_PER_BEAT/8-1:BYTES_PER_HEADER];
 							
@@ -215,11 +225,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 							fifo_control_in		<= 0;
 							
 							if (fifo_data_empty && fifo_control_empty) begin
-								fifo_read_enable	<= 1'b0;
 								header_state		<= WAIT_FOR_DATA;
-							end
-							else begin
-								fifo_read_enable	<= tready_in;
 							end
 						end
 						default : header_state		<= WAIT_FOR_DATA;
@@ -227,16 +233,91 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 				end
 			end
 			
-			always @(posedge clock) begin
-				if (tready_in && (fifo_data_valid && fifo_control_valid)) begin
-					tvalid_out		<= fifo_control_out[CONTROL_DATA_SIZE-1];
-					tdata_out		<= fifo_data_out;
-					tlast_out		<= fifo_control_out[CONTROL_DATA_SIZE-2];
-					tkeep_out		<= fifo_control_out[CONTROL_DATA_SIZE-3:0];
+			always @(posedge clock or reset) begin
+				if (reset) begin
+					capture_output_state	<= WAIT_FOR_FIFO_READY;
+					fifo_read_enable		<= 1'b0;
+					tvalid_out				<= 1'b0;
+					tdata_out				<= 0;
+					tlast_out				<= 1'b0;
+					tkeep_out				<= 0;
+					data_shift_register		<= 0;
+					control_shift_register	<= 0;
+					fifo_read_counter		<= 0;
 				end
 				else begin
-					tvalid_out		<= 1'b0;
-					tlast_out		<= 1'b0;
+					case (capture_output_state)
+						WAIT_FOR_FIFO_READY:
+						begin
+							if ((!fifo_data_empty) && (!fifo_control_empty)) begin
+								data_shift_register		<= 0;
+								control_shift_register	<= 0;
+								fifo_read_counter		<= 0;
+								fifo_read_enable		<= 1'b1;
+								capture_output_state	<= WAIT_FOR_OUTPUT_READY;
+							end
+						end
+						WAIT_FOR_OUTPUT_READY:
+						begin
+							if ((!tready_in) && (fifo_read_counter == READ_LATENCY-1)) begin
+								fifo_read_enable	<= 1'b0;
+							end
+							else begin
+								fifo_read_enable	<= 1'b1;
+							end
+							
+							if (fifo_read_enable) begin
+								fifo_read_counter	<= fifo_read_counter + 1;
+							end
+							
+							tdata_out	<= data_shift_register[(READ_LATENCY*BITS_PER_BEAT-1)-:BITS_PER_BEAT];
+							tvalid_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-1];
+							tlast_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2];
+							tkeep_out	<= control_shift_register[(READ_LATENCY*CONTROL_DATA_SIZE-3)-:BYTES_PER_BEAT];
+							
+							if (fifo_data_empty && fifo_control_empty) begin
+								data_shift_register		<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], fifo_data_out}; 
+								control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], fifo_control_out};
+								fifo_read_enable		<= 1'b0;
+								capture_output_state	<= EMPTY_SHIFT_REGISTERS;
+							end
+							else begin
+								if (fifo_data_valid) begin
+									data_shift_register	<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], fifo_data_out}; 
+								end
+
+								if (fifo_control_valid) begin
+									control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], fifo_control_out};
+								end
+							end
+						end
+						EMPTY_SHIFT_REGISTERS:
+						begin
+							if (control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2]) begin
+								capture_output_state	<= END_OF_TRANSMIT;
+							end
+							else begin
+								if (tready_in) begin
+									data_shift_register	<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], {BITS_PER_BEAT{1'b0}}}; 
+									control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], {CONTROL_DATA_SIZE{1'b0}}};
+								end
+							end
+
+							tdata_out	<= data_shift_register[(READ_LATENCY*BITS_PER_BEAT-1)-:BITS_PER_BEAT];
+							tvalid_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-1];
+							tlast_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2];
+							tkeep_out	<= control_shift_register[(READ_LATENCY*CONTROL_DATA_SIZE-3)-:BYTES_PER_BEAT];
+						end
+						END_OF_TRANSMIT:
+						begin
+							tdata_out				<= 0;
+							tvalid_out				<= 1'b0;
+							tlast_out				<= 1'b0;
+							tkeep_out				<= 0;
+							capture_output_state	<= WAIT_FOR_FIFO_READY;
+						end
+						default : capture_output_state	<= WAIT_FOR_FIFO_READY;
+					endcase
 				end
 			end
 		end
@@ -254,7 +335,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 					header_data				<= 0;
 					fifo_write_enable		<= 1'b0;
 					fifo_data_in			<= 0;
-					fifo_read_enable		<= 1'b0;
 					leftover_tdata			<= 0;
 					leftover_tkeep			<= 0;
 					byte_counter			<= 0;
@@ -265,7 +345,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						WAIT_FOR_DATA:
 						begin
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							byte_counter		<= 0;
@@ -287,7 +366,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 									header_shift_register	<= {tdata_in[BITS_PER_BEAT-1:0], header_shift_register[HEADER_SHIFT_REG_SIZE-1:BITS_PER_BEAT]};
 									byte_counter			<= byte_counter + BYTES_PER_BEAT;
 									fifo_write_enable		<= 1'b0;
-									fifo_read_enable		<= 1'b0;
 									fifo_data_in			<= 0;
 									fifo_control_in			<= 0;
 									leftover_tdata			<= tdata_in[(BITS_PER_BEAT-1)-:DATA_IN_LEFTOVER];
@@ -296,7 +374,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								else begin
 									header_data				<= header_shift_register[HEADER_SIZE-1:0];
 									fifo_write_enable		<= 1'b1;
-									fifo_read_enable		<= 1'b0;
 									fifo_data_in			<= {tdata_in[DATA_IN_TRUNCATED-1:0], leftover_tdata};
 									fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in[BYTES_PER_BEAT-KEEP_LEFTOVER-1:0], leftover_tkeep};
 									leftover_tdata			<= tdata_in[(BITS_PER_BEAT-1)-:DATA_IN_LEFTOVER];
@@ -307,8 +384,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						end
 						TRANSMIT_REMAINING_DATA:
 						begin
-							fifo_read_enable	<= tready_in;
-								
 							if (tvalid_in) begin
 								if (tlast_in) begin
 									if (tkeep_in[(BYTES_PER_BEAT-1)-:KEEP_LEFTOVER] == 0) begin	// Send final beat one clock cycle sooner
@@ -344,7 +419,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						TRANSMIT_EXTRA_BEAT :
 						begin
 							tready_out			<= 1'b0;
-							fifo_read_enable	<= tready_in;
 							fifo_write_enable	<= 1'b1;
 							fifo_data_in		<= {{DATA_IN_TRUNCATED{1'b0}}, leftover_tdata};
 							fifo_control_in		<= {tvalid_in, 1'b1, {KEEP_IN_TRUNCATED{1'b0}}, leftover_tkeep};
@@ -358,11 +432,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 							fifo_control_in		<= 0;
 							
 							if (fifo_data_empty && fifo_control_empty) begin
-								fifo_read_enable	<= 1'b0;
 								header_state		<= WAIT_FOR_DATA;
-							end
-							else begin
-								fifo_read_enable	<= tready_in;
 							end
 						end
 						default : header_state		<= WAIT_FOR_DATA;
@@ -371,6 +441,16 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 			end
 			
 			always @(posedge clock) begin
+				if ((!fifo_data_empty) && (!fifo_data_valid)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else if ((!fifo_data_empty) && (tready_in)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else begin
+					fifo_read_enable	<= 1'b0;
+				end
+					
 				if (tready_in && (fifo_data_valid && fifo_control_valid)) begin
 					tvalid_out		<= fifo_control_out[CONTROL_DATA_SIZE-1];
 					tdata_out		<= fifo_data_out;
@@ -393,7 +473,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 					header_data				<= 0;
 					fifo_write_enable		<= 1'b0;
 					fifo_data_in			<= 0;
-					fifo_read_enable		<= 1'b0;
 					byte_counter			<= 0;
 					header_byte_counter		<= 0;
 					header_shift_register	<= 0;
@@ -403,7 +482,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						WAIT_FOR_DATA:
 						begin
 							fifo_write_enable	<= 1'b0;
-							fifo_read_enable	<= 1'b0;
 							fifo_data_in		<= 0;
 							fifo_control_in		<= 0;
 							byte_counter		<= 0;
@@ -429,7 +507,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								else begin
 									header_data				<= header_shift_register;
 									fifo_write_enable		<= 1'b1;
-									fifo_read_enable		<= 1'b0;
 									fifo_data_in			<= tdata_in;
 									fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in};
 									header_state			<= TRANSMIT_REMAINING_DATA;
@@ -443,14 +520,12 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								
 								if (tlast_in) begin
 									fifo_write_enable		<= 1'b1;
-									fifo_read_enable		<= 1'b0;
 									fifo_data_in			<= tdata_in;
 									fifo_control_in			<= {tvalid_in, 1'b1, tkeep_in};
 									header_state			<= WAIT_FOR_END_OF_DATA;
 								end
 								else begin
 									fifo_write_enable		<= 1'b1;
-									fifo_read_enable		<= 1'b0;
 									fifo_data_in			<= tdata_in;
 									fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in};
 								end
@@ -464,11 +539,7 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 							fifo_control_in		<= 0;
 							
 							if (fifo_data_empty && fifo_control_empty) begin
-								fifo_read_enable	<= 1'b0;
 								header_state		<= WAIT_FOR_DATA;
-							end
-							else begin
-								fifo_read_enable	<= tready_in;
 							end
 						end
 						default : header_state			<= WAIT_FOR_DATA;
@@ -477,6 +548,16 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 			end
 			
 			always @(posedge clock) begin
+				if ((!fifo_data_empty) && (!fifo_data_valid)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else if ((!fifo_data_empty) && (tready_in)) begin
+					fifo_read_enable	<= 1'b1;
+				end
+				else begin
+					fifo_read_enable	<= 1'b0;
+				end
+					
 				if (tready_in && (fifo_data_valid && fifo_control_valid)) begin
 					tvalid_out		<= fifo_control_out[CONTROL_DATA_SIZE-1];
 					tdata_out		<= fifo_data_out;
