@@ -470,6 +470,9 @@ module header_capture_testbench;
 				end
 			end
 			
+			reg [BITS_PER_BEAT-HEADER_SIZE-1:0] verification_data_leftover;
+			reg [(BITS_PER_BEAT-HEADER_SIZE)/8-1:0] verification_keep_leftover;
+			
 			always @(posedge clock or reset) begin
 				if (reset) begin
 					verification_state		<= WAIT_FOR_DATA;
@@ -477,8 +480,8 @@ module header_capture_testbench;
 					data_valid				<= 1'b0;
 					verifier_shift_register	= 0;
 					tready_tx_in			<= 1'b0;
-					tdata_leftover			<= 0;
-					tkeep_leftover			<= 0;
+					verification_data_leftover	<= 0;
+					verification_keep_leftover	<= 0;
 				end
 				else begin
 					case (verification_state)
@@ -499,18 +502,18 @@ module header_capture_testbench;
 							tready_tx_in			<= 1'b1;
 							
 							if (tvalid_tx_out) begin
-								tdata_leftover			<= tdata_tx_out[(BITS_PER_BEAT-1)-:BITS_PER_BEAT-HEADER_SIZE];
-								tkeep_leftover			<= tkeep_tx_out[(BYTES_PER_BEAT-1)-:BYTES_PER_BEAT-BYTES_PER_HEADER];
+								verification_data_leftover<= tdata_tx_out[(BITS_PER_BEAT-1)-:BITS_PER_BEAT-HEADER_SIZE];
+								verification_keep_leftover<= tkeep_tx_out[(BYTES_PER_BEAT-1)-:BYTES_PER_BEAT-BYTES_PER_HEADER];
 								verification_state		<= VERIFY_REMAINING_DATA;
 							end
 						end
 						VERIFY_REMAINING_DATA:
 						begin
 							if (tvalid_tx_out) begin
-								tdata_leftover			<= tdata_tx_out[(BITS_PER_BEAT-1)-:BITS_PER_BEAT-HEADER_SIZE];
-								tkeep_leftover			<= tkeep_tx_out[(BYTES_PER_BEAT-1)-:BYTES_PER_BEAT-BYTES_PER_HEADER];
+								verification_data_leftover		<= tdata_tx_out[(BITS_PER_BEAT-1)-:BITS_PER_BEAT-HEADER_SIZE];
+								verification_keep_leftover		<= tkeep_tx_out[(BYTES_PER_BEAT-1)-:BYTES_PER_BEAT-BYTES_PER_HEADER];
 								
-								if ({tdata_tx_out[HEADER_SIZE-1:0], tdata_leftover} == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
+								if ({tdata_tx_out[HEADER_SIZE-1:0], verification_data_leftover} == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
 									data_valid		<= 1'b1;
 								end
 								else begin
