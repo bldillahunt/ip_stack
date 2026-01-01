@@ -3,7 +3,7 @@
 module fifo_to_axis_testbench;
 
 	localparam BITS_PER_BEAT = 128;
-	localparam BEATS_PER_BURST = 16;
+	localparam BEATS_PER_BURST = 128;
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam CONTROL_DATA_SIZE = BYTES_PER_BEAT + 2;
 	localparam BACK_PRESSURE_DEPTH = 32;

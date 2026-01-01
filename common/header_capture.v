@@ -46,7 +46,6 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	reg [3:0] capture_output_state;
 	
 	reg fifo_write_enable;
-	reg fifo_read_enable;
 	reg [BITS_PER_BEAT-1:0] fifo_data_in;
 	wire [BITS_PER_BEAT-1:0] fifo_data_out;
 	wire fifo_data_valid;
@@ -63,17 +62,18 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 	reg [READ_LATENCY*CONTROL_DATA_SIZE-1:0] control_shift_register;
 	integer fifo_read_counter;
 	
-	generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
-	generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
-	
 	generate
 		reg [HEADER_SHIFT_REG_SIZE-1:0] header_shift_register;
 		
 		if (BITS_PER_BEAT == HEADER_SIZE) begin : same_data_size
+			reg fifo_read_enable;
 			localparam LEFT_OVER_DATA_SIZE = BITS_PER_BEAT - HEADER_SIZE;
 			localparam LEFT_OVER_TKEEP_SIZE = LEFT_OVER_DATA_SIZE/8;
 			reg [LEFT_OVER_DATA_SIZE-1:0] leftover_tdata;
 			reg [LEFT_OVER_TKEEP_SIZE-1:0] leftover_tkeep;
+			
+			generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
+			generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin
@@ -162,6 +162,18 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 			reg [LEFT_OVER_DATA_SIZE-1:0] leftover_tdata;
 			reg [LEFT_OVER_TKEEP_SIZE-1:0] leftover_tkeep;
 			reg [HEADER_SHIFT_REG_SIZE-1:0] header_shift_register;
+			wire data_valid_reg;
+			wire [BITS_PER_BEAT-1:0] data_reg;
+			wire last_reg;
+			wire [BYTES_PER_BEAT-1:0] keep_reg;
+			wire control_valid_reg;
+			wire [CONTROL_DATA_SIZE-1:0] control_data_reg;
+			wire control_last_reg;
+			wire [CONTROL_DATA_SIZE/8-1:0] control_keep_reg;
+			wire fifo_read_enable;
+			
+			generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
+			generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin
@@ -232,93 +244,15 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 					endcase
 				end
 			end
+
+			fifo_to_axis #(BITS_PER_BEAT, 8) tdata_interface (.reset(reset), .clock(clock), .fifo_read_enable(fifo_read_enable), .fifo_empty(fifo_data_empty), .fifo_full(fifo_data_full), .fifo_data_out(fifo_data_out), .fifo_data_valid(fifo_data_valid), .tready_in(tready_in), .tvalid_out(data_valid_reg), .tdata_out(data_reg), .tlast_out(last_reg), .tkeep_out(keep_reg));
+			fifo_to_axis #(CONTROL_DATA_SIZE, 8) control_signal_interface (.reset(reset), .clock(clock), .fifo_read_enable(fifo_read_enable), .fifo_empty(fifo_control_empty), .fifo_full(fifo_control_full), .fifo_data_out(fifo_control_out), .fifo_data_valid(fifo_control_valid), .tready_in(tready_in), .tvalid_out(control_valid_reg), .tdata_out(control_data_reg), .tlast_out(control_last_reg), .tkeep_out(control_keep_reg));
 			
-			always @(posedge clock or reset) begin
-				if (reset) begin
-					capture_output_state	<= WAIT_FOR_FIFO_READY;
-					fifo_read_enable		<= 1'b0;
-					tvalid_out				<= 1'b0;
-					tdata_out				<= 0;
-					tlast_out				<= 1'b0;
-					tkeep_out				<= 0;
-					data_shift_register		<= 0;
-					control_shift_register	<= 0;
-					fifo_read_counter		<= 0;
-				end
-				else begin
-					case (capture_output_state)
-						WAIT_FOR_FIFO_READY:
-						begin
-							if ((!fifo_data_empty) && (!fifo_control_empty)) begin
-								data_shift_register		<= 0;
-								control_shift_register	<= 0;
-								fifo_read_counter		<= 0;
-								fifo_read_enable		<= 1'b1;
-								capture_output_state	<= WAIT_FOR_OUTPUT_READY;
-							end
-						end
-						WAIT_FOR_OUTPUT_READY:
-						begin
-							if ((!tready_in) && (fifo_read_counter == READ_LATENCY-1)) begin
-								fifo_read_enable	<= 1'b0;
-							end
-							else begin
-								fifo_read_enable	<= 1'b1;
-							end
-							
-							if (fifo_read_enable) begin
-								fifo_read_counter	<= fifo_read_counter + 1;
-							end
-							
-							tdata_out	<= data_shift_register[(READ_LATENCY*BITS_PER_BEAT-1)-:BITS_PER_BEAT];
-							tvalid_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-1];
-							tlast_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2];
-							tkeep_out	<= control_shift_register[(READ_LATENCY*CONTROL_DATA_SIZE-3)-:BYTES_PER_BEAT];
-							
-							if (fifo_data_empty && fifo_control_empty) begin
-								data_shift_register		<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], fifo_data_out}; 
-								control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], fifo_control_out};
-								fifo_read_enable		<= 1'b0;
-								capture_output_state	<= EMPTY_SHIFT_REGISTERS;
-							end
-							else begin
-								if (fifo_data_valid) begin
-									data_shift_register	<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], fifo_data_out}; 
-								end
-
-								if (fifo_control_valid) begin
-									control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], fifo_control_out};
-								end
-							end
-						end
-						EMPTY_SHIFT_REGISTERS:
-						begin
-							if (control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2]) begin
-								capture_output_state	<= END_OF_TRANSMIT;
-							end
-							else begin
-								if (tready_in) begin
-									data_shift_register	<= {data_shift_register[READ_LATENCY*BITS_PER_BEAT-BITS_PER_BEAT-1:0], {BITS_PER_BEAT{1'b0}}}; 
-									control_shift_register	<= {control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-CONTROL_DATA_SIZE-1:0], {CONTROL_DATA_SIZE{1'b0}}};
-								end
-							end
-
-							tdata_out	<= data_shift_register[(READ_LATENCY*BITS_PER_BEAT-1)-:BITS_PER_BEAT];
-							tvalid_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-1];
-							tlast_out	<= control_shift_register[READ_LATENCY*CONTROL_DATA_SIZE-2];
-							tkeep_out	<= control_shift_register[(READ_LATENCY*CONTROL_DATA_SIZE-3)-:BYTES_PER_BEAT];
-						end
-						END_OF_TRANSMIT:
-						begin
-							tdata_out				<= 0;
-							tvalid_out				<= 1'b0;
-							tlast_out				<= 1'b0;
-							tkeep_out				<= 0;
-							capture_output_state	<= WAIT_FOR_FIFO_READY;
-						end
-						default : capture_output_state	<= WAIT_FOR_FIFO_READY;
-					endcase
-				end
+			always @(control_data_reg or data_reg or data_valid_reg) begin
+				tvalid_out	<= data_valid_reg;	// control_data_reg[CONTROL_DATA_SIZE-1];
+				tdata_out	<= data_reg;
+				tlast_out	<= control_data_reg[CONTROL_DATA_SIZE-2];
+				tkeep_out	<= control_data_reg[BYTES_PER_BEAT-1:0];
 			end
 		end
 		else if ((HEADER_SIZE % BITS_PER_BEAT) != 0) begin : not_evenly_divisible
@@ -327,6 +261,10 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 			reg [LEFT_OVER_DATA_SIZE-1:0] leftover_tdata;
 			reg [LEFT_OVER_TKEEP_SIZE-1:0] leftover_tkeep;
 			reg [HEADER_SHIFT_REG_SIZE-1:0] header_shift_register;
+			reg fifo_read_enable;
+			
+			generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
+			generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin
@@ -465,6 +403,10 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 		end
 		else if ((HEADER_SIZE % BITS_PER_BEAT) == 0) begin : evenly_divisible	// Small data size, divides evenly into the header size
 			reg [HEADER_SIZE-1:0] header_shift_register;
+			reg fifo_read_enable;
+			
+			generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
+			generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin

@@ -78,7 +78,7 @@ add wave -noupdate /fifo_to_axis_testbench/control_signal_interface/valid_buffer
 add wave -noupdate /fifo_to_axis_testbench/control_signal_interface/eof_buffer
 add wave -noupdate /fifo_to_axis_testbench/control_signal_interface/axis_buffer
 TreeUpdate [SetDefaultTree]
-WaveRestoreCursors {{Cursor 1} {1205000 ps} 0}
+WaveRestoreCursors {{Cursor 1} {7880000 ps} 0}
 quietly wave cursor active 1
 configure wave -namecolwidth 154
 configure wave -valuecolwidth 161
@@ -94,4 +94,4 @@ configure wave -griddelta 40
 configure wave -timeline 0
 configure wave -timelineunits ps
 update
-WaveRestoreZoom {975979 ps} {1001552 ps}
+WaveRestoreZoom {18192284 ps} {18858669 ps}
