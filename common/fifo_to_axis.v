@@ -17,163 +17,170 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	output reg [DATA_SIZE/8-1:0] tkeep_out;
 	integer i;
 	
+	localparam IDLE = 8'h01;
+	localparam WAIT_FOR_FIFO_DATA = 8'h02;
+	localparam CHECK_FOR_READY_TO_SEND = 8'h04;
+	localparam WAIT_FOR_FIFO_EMPTY = 8'h08;
+	localparam WAIT_FOR_PIPELINE_EMPTY = 8'h10;
+	
 	// State machine signals
-	localparam WAIT_FOR_FIFO_DATA = 8'h01;
-	localparam START_DATA_QUEUE = 8'h02;
-	localparam FINISH_BUS_TRANSFER = 8'h04;
-	localparam WAIT_FOR_END_OF_QUEUE = 8'h08;
-	
 	reg [7:0] fifo_to_axis_state;	
-	integer queue_counter;		
-	reg reset_pointer;		
-	reg flush_pipeline;
-	reg ready_to_send;
-	reg end_of_frame;
-	reg decrement_pointer;
-	
+	reg enable_data_output;	
+	reg flush_pipeline;		
+	reg reset_index;
+	reg push_pipeline;
+
 	// Control registers
-	reg [DATA_SIZE-1:0] data_queue[0:PIPELINE_DEPTH-1];
-	reg [0:PIPELINE_DEPTH-1] valid_queue;
-	integer output_pointer;
+	integer input_index;		
+	integer input_counter;	
+	reg [PIPELINE_DEPTH-1:0] valid_buffer;	
+	reg [PIPELINE_DEPTH-1:0] eof_buffer;		
+	reg [DATA_SIZE-1:0] axis_buffer[PIPELINE_DEPTH-1:0];
 	
 	always @(posedge clock or reset) begin
 		if (reset) begin
-			fifo_to_axis_state	<= WAIT_FOR_FIFO_DATA;
+			fifo_to_axis_state	<= IDLE;
 			fifo_read_enable	<= 1'b0;
-			queue_counter		<= 0;
-			reset_pointer		<= 1'b0;
+			enable_data_output	<= 1'b0;
 			flush_pipeline		<= 1'b0;
-			ready_to_send		<= 1'b0;
-			end_of_frame		<= 1'b0;
-			decrement_pointer	<= 1'b0;
+			reset_index			<= 1'b0;
+			push_pipeline		<= 1'b0;
 		end
 		else begin
-			reset_pointer		<= 1'b0;
-			end_of_frame		<= 1'b0;
-			decrement_pointer	<= 1'b0;
+			reset_index			<= 1'b0;
 			
 			case (fifo_to_axis_state)
+				IDLE:
+				begin
+					reset_index			<= 1'b1;
+					flush_pipeline		<= 1'b0;
+					push_pipeline		<= 1'b0;
+					fifo_to_axis_state	<= WAIT_FOR_FIFO_DATA;
+				end
 				WAIT_FOR_FIFO_DATA:
 				begin
 					if (!fifo_empty) begin
 						fifo_read_enable	<= 1'b1;
-						queue_counter		<= 0;
-						reset_pointer		<= 1'b1;
-						fifo_to_axis_state	<= START_DATA_QUEUE;
+						fifo_to_axis_state	<= CHECK_FOR_READY_TO_SEND;
 					end
 				end
-				START_DATA_QUEUE:
+				CHECK_FOR_READY_TO_SEND:
 				begin
-					if (!fifo_empty) begin
-						if (queue_counter < PIPELINE_DEPTH-1) begin
-							fifo_read_enable	<= 1'b1;
-							queue_counter		<= queue_counter + 1;
-						end
-						else begin
-							fifo_read_enable	<= 1'b0;
-							fifo_to_axis_state	<= FINISH_BUS_TRANSFER;
-						end
-					end
-					else begin
+					if (fifo_empty) begin
 						fifo_read_enable	<= 1'b0;
-						decrement_pointer	<= 1'b1;
-						fifo_to_axis_state	<= FINISH_BUS_TRANSFER;
-					end
-				end
-				FINISH_BUS_TRANSFER:
-				begin
-					if (!fifo_empty) begin
-						ready_to_send	<= 1'b1;
-					
-						if (tready_in) begin
-							fifo_read_enable	<= 1'b1;
+						enable_data_output	<= 1'b1;
+						
+						if (input_index < PIPELINE_DEPTH-1) begin
+							push_pipeline		<= 1'b1;
 						end
 						else begin
-							fifo_read_enable	<= 1'b0;
+							push_pipeline		<= 1'b0;
 						end
+						
+						fifo_to_axis_state	<= WAIT_FOR_PIPELINE_EMPTY;
 					end
-					else begin
-						ready_to_send		<= 1'b0;
+					else if (input_counter == PIPELINE_DEPTH-1) begin
+						fifo_read_enable	<= 1'b1;
+						enable_data_output	<= 1'b1;
+						fifo_to_axis_state	<= WAIT_FOR_FIFO_EMPTY;
+					end
+				end
+				WAIT_FOR_FIFO_EMPTY:
+				begin
+					if (fifo_empty) begin
 						fifo_read_enable	<= 1'b0;
 						flush_pipeline		<= 1'b1;
-						fifo_to_axis_state	<= WAIT_FOR_END_OF_QUEUE;
+						enable_data_output	<= 1'b1;
+						fifo_to_axis_state	<= WAIT_FOR_PIPELINE_EMPTY;
+					end
+					else if (!tready_in) begin
+						enable_data_output	<= 1'b0;
 					end
 				end
-				WAIT_FOR_END_OF_QUEUE:
+				WAIT_FOR_PIPELINE_EMPTY:				
 				begin
-					if (output_pointer == 0) begin
+					if ((eof_buffer[PIPELINE_DEPTH-1]) || ((push_pipeline) && (input_index == 0))) begin
 						flush_pipeline		<= 1'b0;
-						end_of_frame		<= 1'b1;
-						fifo_to_axis_state	<= WAIT_FOR_FIFO_DATA;
+						enable_data_output	<= 1'b0;
+						push_pipeline		<= 1'b0;
+						fifo_to_axis_state	<= IDLE;
+					end
+					else if (!tready_in) begin
+						enable_data_output	<= 1'b0;
 					end
 				end
-				default : fifo_to_axis_state	<= WAIT_FOR_FIFO_DATA;
+				default : fifo_to_axis_state	<= IDLE;
 			endcase
 		end
 	end
+	
 	always @(posedge clock) begin
-		if (reset_pointer) begin
-			output_pointer	<= 0;
+		if (reset_index) begin
+			input_index		<= 0;
+			input_counter	<= 0;
+			valid_buffer	<= {PIPELINE_DEPTH-1{1'b0}};
+			eof_buffer		<= {PIPELINE_DEPTH-1{1'b0}};
 			
 			for (i = 0; i < PIPELINE_DEPTH; i = i + 1) begin
-				data_queue[i]	<= 0;
-				valid_queue[i]	<= 0;
+				axis_buffer[i]		<= {DATA_SIZE{1'b0}};
 			end
 		end
-		else if (flush_pipeline) begin
-			tdata_out		<= data_queue[output_pointer];
-			tvalid_out		<= valid_queue[output_pointer];
+		else if (fifo_data_valid) begin
+			axis_buffer[0]	<= fifo_data_out;
+			
+			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
+				axis_buffer[i]	<= axis_buffer[i-1];
+			end
+			
+			if (input_counter < PIPELINE_DEPTH) begin
+				input_index			<= input_counter;
+			end
+			
+			if (input_counter < PIPELINE_DEPTH-1) begin
+				input_counter		<= input_counter + 1;
+			end
+			
+			eof_buffer[0]					<= 1'b1;
+			eof_buffer[PIPELINE_DEPTH-1:1]	<= {PIPELINE_DEPTH-1{1'b0}};
+			valid_buffer[0]					<= 1'b1;
+			
+			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
+				valid_buffer[i]		<= valid_buffer[i-1];
+			end
+		end
+		else if ((flush_pipeline) || ((fifo_empty) && (input_index == PIPELINE_DEPTH-1))) begin
+			axis_buffer[0]	<= 0;
+			eof_buffer[0]	<= 1'b0;
+			
+			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
+				axis_buffer[i]	<= axis_buffer[i-1];
+				valid_buffer[i]	<= valid_buffer[i-1];
+				eof_buffer[i]	<= eof_buffer[i-1];
+			end
+		end
+		else if (push_pipeline) begin
+			if (input_index > 0) begin
+				input_index	<= input_index - 1;
+			end
+		end
+		
+		if (enable_data_output) begin
+			tvalid_out		<= valid_buffer[input_index];
+			tdata_out		<= axis_buffer[input_index];
+			tlast_out		<= eof_buffer[input_index];
 			tkeep_out		<= {DATA_SIZE/8{1'b1}};
-			
-			if (output_pointer > 0) begin
-				output_pointer	<= output_pointer - 1;
-				tlast_out		<= 1'b0;
-			end
-			else begin
-				tlast_out	<= 1'b1;
-			end
 		end
-		else if (end_of_frame) begin
-			tdata_out		<= 0;
-			tvalid_out		<= 1'b0;
-			tkeep_out		<= {DATA_SIZE/8{1'b0}};
-			tlast_out		<= 1'b0;
-			output_pointer	<= 0;
-			
-			for (i = 0; i < PIPELINE_DEPTH; i = i + 1) begin
-				data_queue[i]	<= 0;
-				valid_queue[i]	<= 0;
-			end
-		end
-		else if (decrement_pointer) begin
-			if (output_pointer < PIPELINE_DEPTH-1) begin
-				output_pointer	<= output_pointer - 1;
-			end
-		end
-		else if (tready_in) begin
-			tdata_out		<= data_queue[output_pointer];
-			tvalid_out		<= valid_queue[output_pointer];
+		else if (push_pipeline) begin
+			tvalid_out		<= valid_buffer[input_index];
+			tdata_out		<= axis_buffer[input_index];
+			tlast_out		<= eof_buffer[input_index];
 			tkeep_out		<= {DATA_SIZE/8{1'b1}};
-			
-			if ((fifo_data_valid == 1'b1)  || (ready_to_send == 1'b1))begin
-				if (output_pointer < PIPELINE_DEPTH-1) begin
-					output_pointer	<= output_pointer + 1;
-				end
-				
-				data_queue[0] 	<= fifo_data_out;
-				valid_queue[0]	<= fifo_data_valid;
-
-				for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
-					data_queue[i]	<= data_queue[i-1];
-					valid_queue[i]	<= valid_queue[i-1];
-				end
-			end
 		end
 		else begin
 			tvalid_out		<= 1'b0;
 			tdata_out		<= 0;
 			tlast_out		<= 1'b0;
-			tkeep_out		<= {DATA_SIZE/8{1'b0}};
+			tkeep_out		<= 0;
 		end
 	end
 endmodule

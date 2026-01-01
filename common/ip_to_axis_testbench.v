@@ -3,7 +3,7 @@
 module fifo_to_axis_testbench;
 
 	localparam BITS_PER_BEAT = 128;
-	localparam BEATS_PER_BURST = 5;
+	localparam BEATS_PER_BURST = 16;
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam CONTROL_DATA_SIZE = BYTES_PER_BEAT + 2;
 	localparam BACK_PRESSURE_DEPTH = 32;
@@ -43,6 +43,14 @@ module fifo_to_axis_testbench;
 	integer byte_counter;
 	reg [7:0] ip_to_axis_state;
 	reg tready_in;
+	
+	localparam WAIT_FOR_AXIS_DATA = 4'h1;
+	localparam START_VERIFICATION = 4'h2;
+	
+	reg [3:0] verification_state;		
+	reg [PRBS_SIZE-1:0] prbs_verifier;			
+	reg [TOTAL_BIT_COUNT-1:0] verifier_shift_register;	
+	reg data_valid;				
 
 	function [31:0] prbs_pattern_generator;
 		input data_enable;
@@ -166,4 +174,42 @@ module fifo_to_axis_testbench;
 			endcase
 		end
 	end
+
+	always @(posedge clock or reset) begin
+		if (reset) begin
+			verification_state		<= WAIT_FOR_AXIS_DATA;
+			prbs_verifier			<= 32'hFFFFFFFF;
+			verifier_shift_register	<= 0;
+			data_valid				<= 1'b0;
+		end
+		else begin
+			case (verification_state)
+				WAIT_FOR_AXIS_DATA:
+				begin
+					verifier_shift_register	= prbs_data_array(prbs_verifier);
+					prbs_verifier			= verifier_shift_register[(TOTAL_BIT_COUNT-1)-:PRBS_SIZE];
+					verification_state		<= START_VERIFICATION;
+				end
+				START_VERIFICATION:
+				begin
+					if (tready_in && data_valid_reg) begin
+						if (data_reg == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
+							data_valid				<= 1'b1;
+						end
+						else begin
+							data_valid				<= 1'b0;
+						end
+
+						verifier_shift_register	= verifier_shift_register >> BITS_PER_BEAT;
+						
+						if (last_reg) begin
+							verification_state		<= WAIT_FOR_AXIS_DATA;
+						end
+					end
+				end
+				default: verification_state		<= WAIT_FOR_AXIS_DATA;
+			endcase
+		end
+	end
+
 endmodule
