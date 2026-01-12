@@ -1,30 +1,20 @@
-`timescale 1ns/1ps
 // `define ETHERNET_PROTOCOL
  `define UDP_PROTOCOL
 // `define IP_PROTOCOL
 
-module header_capture_testbench;
+module header_management (clock, reset);
+	parameter BITS_PER_BEAT = 32;
+	parameter TOTAL_BYTE_COUNT = 2048;
+	parameter HEADER_SIZE = 112;
+	
+	input clock;
+	input reset;
 
-`ifdef ETHERNET_PROTOCOL
-	localparam HEADER_SIZE = 112;
 	wire [HEADER_SIZE-1:0] datagram_header;
 	wire [HEADER_SIZE-1:0] header_data_112bit;
-`endif
-
-`ifdef UDP_PROTOCOL
-	localparam HEADER_SIZE = 64;
-	wire [HEADER_SIZE-1:0] datagram_header;
 	wire [HEADER_SIZE-1:0] header_data_64bit;
-`endif
-
-`ifdef IP_PROTOCOL
-	localparam HEADER_SIZE = 160;
-	wire [HEADER_SIZE-1:0] datagram_header;
 	wire [HEADER_SIZE-1:0] header_data_160bit;
-`endif
 
-	localparam BITS_PER_BEAT = 32;
-	localparam TOTAL_BYTE_COUNT = 2048;
 	localparam TOTAL_BIT_COUNT = TOTAL_BYTE_COUNT*8;
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam BYTES_PER_HEADER = HEADER_SIZE/8;
@@ -210,25 +200,9 @@ module header_capture_testbench;
 	byte_swap #(.WIDTH(48))	dest_mac (.data_in(DEST_MAC_ADDRESS), .data_out(destination_mac_address));	
 	byte_swap #(.WIDTH(16))	type_len (.data_in(ETH_TYPE), .data_out(ethernet_type));	
 
-	reg clock;
-	reg reset;
-
 	header_capture #(BITS_PER_BEAT, HEADER_SIZE) dut_rx (.clock(clock), .reset(reset), .tready_out(tready_out), .tvalid_in(tvalid_in), .tdata_in(tdata_in), .tlast_in(tlast_in), .tkeep_in(tkeep_in), .tready_in(tready_in), .tvalid_out(tvalid_out), .tdata_out(tdata_out), .tlast_out(tlast_out), .tkeep_out(tkeep_out), .header_data(header_data));
 	
 	header_insertion #(BITS_PER_BEAT, HEADER_SIZE) dut_tx (.clock(clock), .reset(reset), .tready_out(tready_in), .tvalid_in(tvalid_out), .tdata_in(tdata_out), .tlast_in(tlast_out), .tkeep_in(tkeep_out), .tready_in(tready_tx_in), .tvalid_out(tvalid_tx_out), .tdata_out(tdata_tx_out), .tlast_out(tlast_tx_out), .tkeep_out(tkeep_tx_out), .header_data(header_data));
-	
-	initial begin
-		clock = 1'b0;
-		reset = 1'b1;
-	end
-
-	initial begin
-		#1000 reset = 1'b0;
-	end
-	
-	always begin
-		#5 clock = ~clock;
-	end
 
 	initial begin
 		// First, create the PRBS data array
@@ -248,21 +222,21 @@ module header_capture_testbench;
 	byte_swap #(.WIDTH(16))	udp_chksum (.data_in(udp_checksum), .data_out(udp_checksum_swapped));	
 	
 	assign header_data_112bit = {ethernet_type, destination_mac_address, source_mac_address};
-	assign header_data_160bit = 32'h01234567;
+	assign header_data_160bit = {5{32'h01234567}};
 	assign header_data_64bit = {udp_checksum_swapped, udp_length_swapped, udp_destination_swapped, udp_source_swapped};
 
-`ifdef ETHERNET_PROTOCOL
-	assign datagram_header = header_data_112bit;
-`endif
-
-`ifdef UDP_PROTOCOL
-	assign datagram_header = header_data_64bit;
-`endif
-
-`ifdef IP_PROTOCOL
-	assign datagram_header = header_data_160bit;
-`endif
-
+	generate
+		if (HEADER_SIZE == 112) begin : ethernet_header
+			assign datagram_header = header_data_112bit;		
+		end
+		else if (HEADER_SIZE == 64) begin : udp_header
+			assign datagram_header = header_data_64bit;
+		end
+		else if (HEADER_SIZE == 160) begin : ip_header
+			assign datagram_header = header_data_160bit;
+		end
+	endgenerate
+	
 	generate
 		if (BITS_PER_BEAT == HEADER_SIZE) begin : same_size
 			reg [HEADER_SIZE-1:0] tdata_leftover;
@@ -579,6 +553,8 @@ module header_capture_testbench;
 			reg [TOTAL_BIT_COUNT-1:0] prbs_shift_register;
 			reg [TOTAL_BIT_COUNT/8-1:0] tkeep_shift_register;
 			reg [TOTAL_BIT_COUNT-1:0] verifier_shift_register;
+			reg [header_leftover_int-1:0] leftover_prbs_data;
+			integer byte_counter;
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin
@@ -587,7 +563,6 @@ module header_capture_testbench;
 					tdata_in				<= 0;
 					tlast_in				<= 1'b0;
 					tkeep_in				<= 0;
-					tready_tx_in			<= 1'b0;
 					prbs_register			<= 32'hFFFFFFFF;
 					beat_counter			<= 0;
 					data_valid				<= 1'b0;
@@ -601,7 +576,6 @@ module header_capture_testbench;
 					enable_verification		<= 1'b0;
 				end
 				else begin
-					tready_tx_in			<= 1'b1;
 					enable_verification		<= 1'b0;
 					
 					case (header_capture_state)
@@ -685,28 +659,75 @@ module header_capture_testbench;
 					endcase
 				end
 			end
-			
-			always @(posedge clock) begin
+
+			always @(posedge clock or reset) begin
 				if (reset) begin
-					prbs_verifier	<= {PRBS_SIZE{1'b1}};
-					data_valid		<= 1'b0;
-					verifier_shift_register	<= 0;
+					verification_state		<= WAIT_FOR_DATA;
+					prbs_verifier			= {PRBS_SIZE{1'b1}};
+					data_valid				<= 1'b0;
+					verifier_shift_register	= 0;
+					tready_tx_in			<= 1'b0;
+					byte_counter			<= 0;
+					leftover_prbs_data		<= 0;
 				end
 				else begin
-					if (enable_verification) begin
-						verifier_shift_register	= prbs_data_array(prbs_verifier);
-						prbs_verifier			= verifier_shift_register[TOTAL_BIT_COUNT-1-:PRBS_SIZE];
-					end
-					else if (tvalid_out == 1'b1) begin
-						if (tdata_out == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
-							data_valid		<= 1'b1;
+					case (verification_state)
+						WAIT_FOR_DATA:
+						begin
+							if (tvalid_tx_out) begin
+								tready_tx_in			<= 1'b1;
+								verifier_shift_register	= prbs_data_array(prbs_verifier);
+								prbs_verifier			= verifier_shift_register[(TOTAL_BIT_COUNT-1)-:PRBS_SIZE];
+								byte_counter			<= 0;
+								verification_state		<= REMOVE_HEADER_DATA;
+							end
+							else begin
+								tready_tx_in			<= 1'b0;
+							end
 						end
-						else begin
-							data_valid		<= 1'b0;
+						REMOVE_HEADER_DATA:
+						begin
+							tready_tx_in			<= 1'b1;
+							
+							if (tvalid_tx_out) begin
+								if (byte_counter < BYTES_PER_HEADER-BYTES_PER_BEAT) begin
+									byte_counter			<= byte_counter + BYTES_PER_BEAT;
+								end
+								else begin
+									leftover_prbs_data		<= tdata_tx_out[(BITS_PER_BEAT-1)-:header_leftover_int];
+									verification_state		<= VERIFY_REMAINING_DATA;
+								end	
+							end
 						end
-
-						verifier_shift_register		<= verifier_shift_register >> BITS_PER_BEAT;
-					end
+						VERIFY_REMAINING_DATA:
+						begin
+							if (tvalid_tx_out) begin
+								tready_tx_in			<= 1'b1;
+								
+								if ({tdata_tx_out[header_leftover_int-1:0], leftover_prbs_data} == verifier_shift_register[BITS_PER_BEAT-1:0]) begin
+									data_valid			<= 1'b1;
+								end
+								else begin
+									data_valid			<= 1'b0;
+								end
+								
+								verifier_shift_register	<= verifier_shift_register >> BITS_PER_BEAT;
+								leftover_prbs_data		<= tdata_tx_out[(BITS_PER_BEAT-1)-:header_leftover_int];
+								
+								if (tlast_tx_out) begin
+									tready_tx_in			<= 1'b0;
+									verification_state		<= WAIT_FOR_DATA;
+								end
+								else begin
+									tready_tx_in			<= 1'b1;
+								end
+							end
+//							else begin
+//								tready_tx_in			<= 1'b0;
+//							end
+						end
+						default:	verification_state		<= WAIT_FOR_DATA;
+					endcase
 				end
 			end
 		end

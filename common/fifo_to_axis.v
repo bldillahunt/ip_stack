@@ -2,6 +2,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	
 	parameter DATA_SIZE = 512;
 	parameter PIPELINE_DEPTH = 4;
+	localparam TKEEP_SIZE = DATA_SIZE/8;
 	
 	input reset;
 	input clock;
@@ -14,7 +15,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	output reg tvalid_out;
 	output reg [DATA_SIZE-1:0] tdata_out;
 	output reg tlast_out;
-	output reg [DATA_SIZE/8-1:0] tkeep_out;
+	output reg [TKEEP_SIZE-1:0] tkeep_out;
 	integer i;
 	
 	localparam IDLE = 8'h01;
@@ -37,7 +38,24 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	reg [PIPELINE_DEPTH-1:0] valid_buffer;	
 	reg [PIPELINE_DEPTH-1:0] eof_buffer;		
 	reg [DATA_SIZE-1:0] axis_buffer[PIPELINE_DEPTH-1:0];
-	reg eof_index;
+	integer eof_index;
+
+	function integer tkeep_data_size;
+		input integer tkeep_size_in;
+		reg [DATA_SIZE/8-1:0] tkeep_data;
+		
+		begin		
+			if (tkeep_size_in/8 < 1) begin
+				tkeep_data_size = 2;
+			end
+			else if ((tkeep_size_in % 8) == 0) begin
+				tkeep_data_size = DATA_SIZE/8;
+			end
+			else begin : fallback
+				tkeep_data_size = 1;
+			end
+		end
+	endfunction
 	
 	always @(posedge clock or reset) begin
 		if (reset) begin
@@ -188,13 +206,22 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 				eof_buffer[i]	<= eof_buffer[i-1];
 			end
 		end
-		else if ((push_pipeline) || ((tvalid_out) && (!tready_in))) begin
+		else if ((tvalid_out) && (!tready_in)) begin
+			if (input_index == PIPELINE_DEPTH-1) begin
+				input_index	<= input_index - 1;
+
+				if (input_index > 1) begin
+					eof_index	<= input_index - 2;
+				end
+			end
+		end
+		else if (push_pipeline) begin
 			if (input_index > 0) begin
 				input_index	<= input_index - 1;
-			end
 			
-			if (input_index > 1) begin
-				eof_index	<= input_index - 2;
+				if (input_index > 1) begin
+					eof_index	<= input_index - 2;
+				end
 			end
 		end
 		
@@ -202,19 +229,20 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 			tvalid_out		<= valid_buffer[input_index];
 			tdata_out		<= axis_buffer[input_index];
 			
-			if (input_counter < PIPELINE_DEPTH) begin
+			if (input_counter < PIPELINE_DEPTH-1) begin
 				tlast_out		<= fifo_empty & ~fifo_data_valid;	// eof_buffer[input_index];
 			end
 			else begin
 				tlast_out		<= eof_buffer[eof_index];
 			end
-			tkeep_out		<= {DATA_SIZE/8{1'b1}};
+			
+			tkeep_out		<= {tkeep_data_size(DATA_SIZE){1'b1}};
 		end
 		else if (push_pipeline) begin
 			tvalid_out		<= valid_buffer[input_index];
 			tdata_out		<= axis_buffer[input_index];
 			tlast_out		<= eof_buffer[eof_index];
-			tkeep_out		<= {DATA_SIZE/8{1'b1}};
+			tkeep_out		<= {tkeep_data_size(DATA_SIZE){1'b1}};
 		end
 		else if (end_of_frame) begin
 			tvalid_out		<= 1'b0;
