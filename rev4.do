@@ -1,8 +1,8 @@
 onerror {resume}
 quietly WaveActivateNextPane {} 0
 add wave -noupdate /fifo_to_axis_testbench/fifo_write_enable
-add wave -noupdate /fifo_to_axis_testbench/fifo_data_in
-add wave -noupdate /fifo_to_axis_testbench/fifo_data_out
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/fifo_data_in
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/fifo_data_out
 add wave -noupdate /fifo_to_axis_testbench/fifo_data_valid
 add wave -noupdate /fifo_to_axis_testbench/fifo_data_empty
 add wave -noupdate /fifo_to_axis_testbench/fifo_data_full
@@ -12,7 +12,7 @@ add wave -noupdate /fifo_to_axis_testbench/fifo_control_valid
 add wave -noupdate /fifo_to_axis_testbench/fifo_control_empty
 add wave -noupdate /fifo_to_axis_testbench/fifo_control_full
 add wave -noupdate /fifo_to_axis_testbench/data_valid_reg
-add wave -noupdate /fifo_to_axis_testbench/data_reg
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/data_reg
 add wave -noupdate /fifo_to_axis_testbench/last_reg
 add wave -noupdate /fifo_to_axis_testbench/keep_reg
 add wave -noupdate /fifo_to_axis_testbench/control_valid_reg
@@ -21,10 +21,10 @@ add wave -noupdate /fifo_to_axis_testbench/control_last_reg
 add wave -noupdate /fifo_to_axis_testbench/control_keep_reg
 add wave -noupdate /fifo_to_axis_testbench/clock
 add wave -noupdate /fifo_to_axis_testbench/reset
-add wave -noupdate /fifo_to_axis_testbench/prbs_register
-add wave -noupdate /fifo_to_axis_testbench/prbs_shift_register
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/prbs_register
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/prbs_shift_register
 add wave -noupdate /fifo_to_axis_testbench/byte_counter
-add wave -noupdate /fifo_to_axis_testbench/ip_to_axis_state
+add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/ip_to_axis_state
 add wave -noupdate /fifo_to_axis_testbench/tready_in
 add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/verification_state
 add wave -noupdate -radix hexadecimal /fifo_to_axis_testbench/prbs_verifier
@@ -56,7 +56,7 @@ add wave -noupdate /fifo_to_axis_testbench/tdata_interface/output_counter
 add wave -noupdate /fifo_to_axis_testbench/tdata_interface/output_index
 add wave -noupdate /fifo_to_axis_testbench/tdata_interface/current_count
 TreeUpdate [SetDefaultTree]
-WaveRestoreCursors {{Cursor 1} {1201518 ps} 0}
+WaveRestoreCursors {{Cursor 1} {1088115 ps} 0}
 quietly wave cursor active 1
 configure wave -namecolwidth 150
 configure wave -valuecolwidth 70
@@ -72,4 +72,4 @@ configure wave -griddelta 40
 configure wave -timeline 0
 configure wave -timelineunits ps
 update
-WaveRestoreZoom {50085900 ps} {50096343 ps}
+WaveRestoreZoom {0 ps} {10921248 ps}

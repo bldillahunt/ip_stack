@@ -151,12 +151,15 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 						tkeep_out		<= {TKEEP_SIZE{1'b1}};
 						tlast_out		<= eof_shift_register[input_index];
 						
-						if (tready_in) begin
-							output_counter		<= output_counter + 1;
-							output_index		<= input_index;
+						if (fifo_empty) begin
+							output_index		<= input_index - 1;
 						end
 						else begin
-							output_index		<= input_index + 1;
+							output_index		<= input_index;
+						end
+						
+						if (tready_in) begin
+							output_counter		<= output_counter + 1;
 						end
 						
 						if (eof_shift_register[0]) begin
