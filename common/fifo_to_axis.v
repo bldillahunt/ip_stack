@@ -1,12 +1,12 @@
 `include "common_header.v"
 
-module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo_data_out, fifo_data_valid, tready_in, tvalid_out, tdata_out, tlast_out, tkeep_out);
+module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo_data_out, fifo_data_valid, tready_in, tvalid_out, tdata_out, tlast_out);
 	
 	parameter DATA_SIZE = 512;
 	parameter PIPELINE_DEPTH = 4;
-	parameter EVEN_DATA_TYPE = 1'b1;
+//	parameter EVEN_DATA_TYPE = 1'b1;
 	
-	localparam TKEEP_SIZE = (EVEN_DATA_TYPE ? DATA_SIZE/8 : 32);
+//	localparam TKEEP_SIZE = (EVEN_DATA_TYPE ? DATA_SIZE/8 : 32);
 	localparam HIGH_WATER_MARK = PIPELINE_DEPTH/2;
 	
 	input reset;
@@ -20,7 +20,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	output reg tvalid_out;
 	output reg [DATA_SIZE-1:0] tdata_out;
 	output reg tlast_out;
-	output reg [TKEEP_SIZE-1:0] tkeep_out;
+//	output reg [TKEEP_SIZE-1:0] tkeep_out;
 	integer i;
 	
 	// Input side state machine registers
@@ -116,7 +116,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 				end
 				WAIT_FOR_END_OF_DATA:
 				begin
-					if (eof_shift_register[output_index] == 1'b1) begin
+					if ((tready_in) && (eof_shift_register[output_index] == 1'b1)) begin
 						flush_pipeline		<= 1'b0;
 						fifo_access_state	<= IDLE;
 					end
@@ -131,7 +131,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 			axis_access_state	<= IDLE;
 			tvalid_out			<= 1'b0;
 			tdata_out			<= 0;
-			tkeep_out			<= 0;
+//			tkeep_out			<= 0;
 			tlast_out			<= 1'b0;
 			output_counter		<= 0;
 			output_index		<= 0;
@@ -148,7 +148,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 						current_count	<= input_counter;
 						tvalid_out		<= 1'b1;
 						tdata_out		<= shift_register[input_index];
-						tkeep_out		<= {TKEEP_SIZE{1'b1}};
+//						tkeep_out		<= {TKEEP_SIZE{1'b1}};
 						tlast_out		<= eof_shift_register[input_index];
 						
 						if (fifo_empty) begin
@@ -173,21 +173,15 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 						current_count		<= input_counter;
 						tvalid_out			<= 1'b1;
 						tdata_out			<= shift_register[input_index];
-						tkeep_out			<= {TKEEP_SIZE{1'b1}};
+//						tkeep_out			<= {TKEEP_SIZE{1'b1}};
 						tlast_out			<= eof_shift_register[input_index];
-						
-						if (tready_in) begin
-							output_counter		<= output_counter + 1;
-							
-							if (input_index > 0) begin
-								output_index		<= input_index - 1;
-							end
-							else begin
-								output_index		<= 0;
-							end
+						output_counter		<= output_counter + 1;
+
+						if (input_index > 0) begin
+							output_index		<= input_index - 1;
 						end
 						else begin
-							output_index		<= input_index + 1;
+							output_index		<= 0;
 						end
 						
 						axis_access_state	<= EMPTY_PIPELINE_DATA;
@@ -198,7 +192,6 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 					if (tready_in) begin
 						tvalid_out		<= 1'b1;
 						tdata_out		<= shift_register[output_index];
-						tkeep_out		<= {TKEEP_SIZE{1'b1}};
 						tlast_out		<= eof_shift_register[output_index];
 						output_counter	<= output_counter + 1;
 						current_count	<= input_counter;
@@ -211,6 +204,11 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 							axis_access_state	<= EMPTY_PIPELINE_DATA;
 						end
 					end
+					else begin
+						if (fifo_data_valid) begin
+							output_index	<= input_index;
+						end
+					end
 				end
 				EMPTY_PIPELINE_DATA:
 				begin
@@ -218,7 +216,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 						if (!eof_shift_register[0]) begin
 							tvalid_out		<= 1'b1;
 							tdata_out		<= shift_register[output_index];
-							tkeep_out		<= {TKEEP_SIZE{1'b1}};
+//							tkeep_out		<= {TKEEP_SIZE{1'b1}};
 							tlast_out		<= eof_shift_register[output_index];
 							output_counter	<= output_counter + 1;
 
@@ -233,22 +231,23 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 							if (output_counter == current_count) begin
 								tvalid_out			<= 1'b0;
 								tdata_out			<= 0;
-								tkeep_out			<= 0;
+//								tkeep_out			<= 0;
 								tlast_out			<= 1'b0;
 								axis_access_state	<= IDLE;
 							end
 							else begin
 								tvalid_out			<= 1'b1;
 								tdata_out			<= shift_register[output_index];
-								tkeep_out			<= {TKEEP_SIZE{1'b1}};
+//								tkeep_out			<= {TKEEP_SIZE{1'b1}};
 								tlast_out			<= eof_shift_register[output_index];
 								output_counter		<= output_counter + 1;
 								
 								if (output_index > 0) begin
 									output_index		<= output_index - 1;
 								end
-								
-//								axis_access_state	<= CLEAR_BUS_TRANSACTION;
+								else begin
+									axis_access_state	<= CLEAR_BUS_TRANSACTION;
+								end
 							end
 						end
 					end
@@ -257,7 +256,7 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 				begin
 					tvalid_out			<= 1'b0;
 					tdata_out			<= 0;
-					tkeep_out			<= 0;
+//					tkeep_out			<= 0;
 					tlast_out			<= 1'b0;
 					axis_access_state	<= IDLE;
 				end
