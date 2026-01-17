@@ -6,6 +6,7 @@ module header_management (clock, reset);
 	parameter BITS_PER_BEAT = 32;
 	parameter TOTAL_BYTE_COUNT = 2048;
 	parameter HEADER_SIZE = 112;
+	parameter PIPELINE_DEPTH = 8;				// Maximum number of clock cycles between tvalid and tready
 	
 	input clock;
 	input reset;
@@ -200,9 +201,9 @@ module header_management (clock, reset);
 	byte_swap #(.WIDTH(48))	dest_mac (.data_in(DEST_MAC_ADDRESS), .data_out(destination_mac_address));	
 	byte_swap #(.WIDTH(16))	type_len (.data_in(ETH_TYPE), .data_out(ethernet_type));	
 
-	header_capture #(BITS_PER_BEAT, HEADER_SIZE) dut_rx (.clock(clock), .reset(reset), .tready_out(tready_out), .tvalid_in(tvalid_in), .tdata_in(tdata_in), .tlast_in(tlast_in), .tkeep_in(tkeep_in), .tready_in(tready_in), .tvalid_out(tvalid_out), .tdata_out(tdata_out), .tlast_out(tlast_out), .tkeep_out(tkeep_out), .header_data(header_data));
+	header_capture #(BITS_PER_BEAT, HEADER_SIZE, PIPELINE_DEPTH) dut_rx (.clock(clock), .reset(reset), .tready_out(tready_out), .tvalid_in(tvalid_in), .tdata_in(tdata_in), .tlast_in(tlast_in), .tkeep_in(tkeep_in), .tready_in(tready_in), .tvalid_out(tvalid_out), .tdata_out(tdata_out), .tlast_out(tlast_out), .tkeep_out(tkeep_out), .header_data(header_data));
 	
-	header_insertion #(BITS_PER_BEAT, HEADER_SIZE) dut_tx (.clock(clock), .reset(reset), .tready_out(tready_in), .tvalid_in(tvalid_out), .tdata_in(tdata_out), .tlast_in(tlast_out), .tkeep_in(tkeep_out), .tready_in(tready_tx_in), .tvalid_out(tvalid_tx_out), .tdata_out(tdata_tx_out), .tlast_out(tlast_tx_out), .tkeep_out(tkeep_tx_out), .header_data(header_data));
+	header_insertion #(BITS_PER_BEAT, HEADER_SIZE, PIPELINE_DEPTH) dut_tx (.clock(clock), .reset(reset), .tready_out(tready_in), .tvalid_in(tvalid_out), .tdata_in(tdata_out), .tlast_in(tlast_out), .tkeep_in(tkeep_out), .tready_in(tready_tx_in), .tvalid_out(tvalid_tx_out), .tdata_out(tdata_tx_out), .tlast_out(tlast_tx_out), .tkeep_out(tkeep_tx_out), .header_data(header_data));
 
 	initial begin
 		// First, create the PRBS data array

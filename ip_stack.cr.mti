@@ -63,12 +63,12 @@ Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  
 Top level modules:
 	header_capture_testbench
 
-} {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/fifo_to_axis_top.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/fifo_to_axis_top.v
+} {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management_testbench.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management_testbench.v
 Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  5 2016
--- Compiling module fifo_to_axis_top
+-- Compiling module header_management_testbench
 
 Top level modules:
-	fifo_to_axis_top
+	header_management_testbench
 
 } {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_capture.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_capture.v
 Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  5 2016
@@ -77,12 +77,12 @@ Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  
 Top level modules:
 	header_capture
 
-} {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management_testbench.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management_testbench.v
+} {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/fifo_to_axis_top.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/fifo_to_axis_top.v
 Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  5 2016
--- Compiling module header_management_testbench
+-- Compiling module fifo_to_axis_top
 
 Top level modules:
-	header_management_testbench
+	fifo_to_axis_top
 
 } {} {}} C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management.v {1 {vlog -work work -stats=none C:/Users/ambig/source/RTL/Verilog/IP_stack/common/header_management.v
 Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  5 2016

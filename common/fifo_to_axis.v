@@ -88,7 +88,14 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 						end
 						
 						input_counter	<= input_counter + 1;
-						input_index		<= input_counter;
+						
+						
+						if (input_counter < PIPELINE_DEPTH) begin
+							input_index		<= input_counter;
+						end
+						else begin
+							input_index		<= PIPELINE_DEPTH - 1;
+						end
 						
 						if (input_counter >= HIGH_WATER_MARK) begin
 							enable_data_output	<= 1'b1;
