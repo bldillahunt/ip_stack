@@ -1,8 +1,13 @@
+`include "common_header.v"
+
 module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo_data_out, fifo_data_valid, tready_in, tvalid_out, tdata_out, tlast_out, tkeep_out);
 	
 	parameter DATA_SIZE = 512;
 	parameter PIPELINE_DEPTH = 4;
-	localparam TKEEP_SIZE = DATA_SIZE/8;
+	parameter EVEN_DATA_TYPE = 1'b1;
+	
+	localparam TKEEP_SIZE = (EVEN_DATA_TYPE ? DATA_SIZE/8 : 32);
+	localparam HIGH_WATER_MARK = PIPELINE_DEPTH/2;
 	
 	input reset;
 	input clock;
@@ -18,237 +23,243 @@ module fifo_to_axis (reset, clock, fifo_read_enable, fifo_empty, fifo_full, fifo
 	output reg [TKEEP_SIZE-1:0] tkeep_out;
 	integer i;
 	
-	localparam IDLE = 8'h01;
-	localparam WAIT_FOR_FIFO_DATA = 8'h02;
-	localparam CHECK_FOR_READY_TO_SEND = 8'h04;
-	localparam WAIT_FOR_FIFO_EMPTY = 8'h08;
-	localparam WAIT_FOR_PIPELINE_EMPTY = 8'h10;
+	// Input side state machine registers
+	localparam [7:0] IDLE = 8'h01;
+	localparam [7:0] FILL_TO_WATERMARK = 8'h02;
+	localparam [7:0] WAIT_FOR_END_OF_DATA = 8'h04;
 	
-	// State machine signals
-	reg [7:0] fifo_to_axis_state;	
+	reg [7:0] fifo_access_state;
+	reg [PIPELINE_DEPTH-1:0] eof_shift_register;
+	reg [DATA_SIZE-1:0] shift_register[0:PIPELINE_DEPTH-1];
+	integer input_counter;		
+	integer input_index;			
 	reg enable_data_output;	
 	reg flush_pipeline;		
-	reg reset_index;
-	reg push_pipeline;
-	reg end_of_frame;
-
-	// Control registers
-	integer input_index;		
-	integer input_counter;	
-	reg [PIPELINE_DEPTH-1:0] valid_buffer;	
-	reg [PIPELINE_DEPTH-1:0] eof_buffer;		
-	reg [DATA_SIZE-1:0] axis_buffer[PIPELINE_DEPTH-1:0];
-	integer eof_index;
-
-	function integer tkeep_data_size;
-		input integer tkeep_size_in;
-		reg [DATA_SIZE/8-1:0] tkeep_data;
-		
-		begin		
-			if (tkeep_size_in/8 < 1) begin
-				tkeep_data_size = 2;
-			end
-			else if ((tkeep_size_in % 8) == 0) begin
-				tkeep_data_size = DATA_SIZE/8;
-			end
-			else begin : fallback
-				tkeep_data_size = 1;
-			end
-		end
-	endfunction
 	
+	// Output side state machine register
+//	localparam [7:0] IDLE = 8'h01;
+	localparam [7:0] TRANSMIT_DATA_STREAM = 8'h02;
+	localparam [7:0] EMPTY_PIPELINE_DATA = 8'h04;
+	localparam [7:0] CLEAR_BUS_TRANSACTION = 8'h08;
+	
+	reg [7:0] axis_access_state;
+	integer output_counter;		
+	integer output_index;		
+	integer current_count;
+	
+	// Input side state machine
 	always @(posedge clock or reset) begin
 		if (reset) begin
-			fifo_to_axis_state	<= IDLE;
+			fifo_access_state	<= IDLE;
+			eof_shift_register	<= {PIPELINE_DEPTH{1'b0}};
+			
+			for (i = 0; i < PIPELINE_DEPTH; i = i + 1) begin
+				shift_register[i]	<= 0;
+			end
+			
+			input_counter		<= 0;
+			input_index			<= 0;
 			fifo_read_enable	<= 1'b0;
 			enable_data_output	<= 1'b0;
 			flush_pipeline		<= 1'b0;
-			reset_index			<= 1'b0;
-			push_pipeline		<= 1'b0;
-			end_of_frame		<= 1'b0;
 		end
 		else begin
-			reset_index			<= 1'b0;
-			end_of_frame		<= 1'b0;
-			
-			case (fifo_to_axis_state)
+			case (fifo_access_state)
 				IDLE:
 				begin
-					reset_index			<= 1'b1;
-					flush_pipeline		<= 1'b0;
-					push_pipeline		<= 1'b0;
-					fifo_to_axis_state	<= WAIT_FOR_FIFO_DATA;
-				end
-				WAIT_FOR_FIFO_DATA:
-				begin
+					input_counter		<= 0;
+					input_index			<= 0;
+					enable_data_output	<= 1'b0;
+					
 					if (!fifo_empty) begin
 						fifo_read_enable	<= 1'b1;
-						fifo_to_axis_state	<= CHECK_FOR_READY_TO_SEND;
+						fifo_access_state	<= FILL_TO_WATERMARK;
 					end
 				end
-				CHECK_FOR_READY_TO_SEND:
+				FILL_TO_WATERMARK:
 				begin
-					if (fifo_empty) begin
-						fifo_read_enable	<= 1'b0;
-						enable_data_output	<= 1'b1;
+					if (fifo_data_valid) begin
+						shift_register[0]		<= fifo_data_out;
+						eof_shift_register[0]	<= fifo_empty;
 						
-						if (input_index < PIPELINE_DEPTH-1) begin
-							push_pipeline		<= 1'b1;
-						end
-						else begin
-							push_pipeline		<= 1'b0;
+						for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
+							shift_register[i]		<= shift_register[i-1];
+							eof_shift_register[i]	<= eof_shift_register[i-1];
 						end
 						
-						fifo_to_axis_state	<= WAIT_FOR_PIPELINE_EMPTY;
+						input_counter	<= input_counter + 1;
+						input_index		<= input_counter;
+						
+						if (input_counter >= HIGH_WATER_MARK) begin
+							enable_data_output	<= 1'b1;
+							flush_pipeline		<= 1'b0;
+						end
+						else if (fifo_empty) begin
+							enable_data_output	<= 1'b0;
+							flush_pipeline		<= 1'b1;
+							fifo_read_enable	<= 1'b0;
+							fifo_access_state	<= WAIT_FOR_END_OF_DATA;
+						end
 					end
-					else if (input_counter == PIPELINE_DEPTH-1) begin
-						fifo_read_enable	<= tready_in;
-						enable_data_output	<= 1'b1;
-						fifo_to_axis_state	<= WAIT_FOR_FIFO_EMPTY;
-					end
-				end
-				WAIT_FOR_FIFO_EMPTY:
-				begin
-					if (fifo_empty) begin
-						fifo_read_enable	<= 1'b0;
+					else if (fifo_empty) begin
+						eof_shift_register[0]	<= 1'b1;
+						
+						for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
+							eof_shift_register[i]	<= eof_shift_register[i-1];
+						end
+
+						enable_data_output	<= 1'b0;
 						flush_pipeline		<= 1'b1;
-						enable_data_output	<= 1'b1;
-						fifo_to_axis_state	<= WAIT_FOR_PIPELINE_EMPTY;
-					end
-					else if (!tready_in) begin
 						fifo_read_enable	<= 1'b0;
-						enable_data_output	<= 1'b0;
-					end
-					else begin
-						fifo_read_enable	<= 1'b1;
-						enable_data_output	<= 1'b1;
+						fifo_access_state	<= WAIT_FOR_END_OF_DATA;
 					end
 				end
-				WAIT_FOR_PIPELINE_EMPTY:				
+				WAIT_FOR_END_OF_DATA:
 				begin
-					if ((eof_buffer[PIPELINE_DEPTH-1]) || ((push_pipeline) && (input_index == 0))) begin
+					if (eof_shift_register[output_index] == 1'b1) begin
 						flush_pipeline		<= 1'b0;
-						enable_data_output	<= 1'b0;
-						push_pipeline		<= 1'b0;
-						end_of_frame		<= 1'b1;
-						fifo_to_axis_state	<= IDLE;
-					end
-					else if (!tready_in) begin
-						enable_data_output	<= 1'b0;
+						fifo_access_state	<= IDLE;
 					end
 				end
-				default : fifo_to_axis_state	<= IDLE;
+				default: fifo_access_state	<= IDLE;
 			endcase
 		end
 	end
 	
-	always @(posedge clock) begin
-		if (reset_index) begin
-			input_index		<= 0;
-			input_counter	<= 0;
-			eof_index		<= 0;
-			valid_buffer	<= {PIPELINE_DEPTH-1{1'b0}};
-			eof_buffer		<= {PIPELINE_DEPTH-1{1'b0}};
-			
-			for (i = 0; i < PIPELINE_DEPTH; i = i + 1) begin
-				axis_buffer[i]		<= {DATA_SIZE{1'b0}};
-			end
+	always @(posedge clock or reset) begin
+		if (reset) begin
+			axis_access_state	<= IDLE;
+			tvalid_out			<= 1'b0;
+			tdata_out			<= 0;
+			tkeep_out			<= 0;
+			tlast_out			<= 1'b0;
+			output_counter		<= 0;
+			output_index		<= 0;
+			current_count		<= 0;
 		end
-		else if ((fifo_empty) && (!flush_pipeline) && (!fifo_data_valid)) begin
-			axis_buffer[0]	<= 0;
-			eof_buffer[0]	<= fifo_empty;
-			valid_buffer[0]	<= 1'b0;
-
-			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
-				axis_buffer[i]	<= axis_buffer[i-1];
-				valid_buffer[i]	<= valid_buffer[i-1];
-				eof_buffer[i]	<= eof_buffer[i-1];
-			end
-		end
-		else if (((fifo_data_valid) && (!((!tready_in) && (input_index == PIPELINE_DEPTH-1)))) || ((tready_in) && (valid_buffer[input_index] == 1'b1) && (!flush_pipeline))) begin
-			axis_buffer[0]	<= fifo_data_out;
-			
-			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
-				axis_buffer[i]	<= axis_buffer[i-1];
-			end
-			
-			if ((input_counter < PIPELINE_DEPTH) && (fifo_data_valid) && (!tready_in)) begin
-				input_index			<= input_counter;
-				eof_index			<= input_counter;
-			end
-			
-			if (input_counter < PIPELINE_DEPTH-1) begin
-				input_counter		<= input_counter + 1;
-			end
-			
-			eof_buffer[0]					<= fifo_empty;
-			eof_buffer[PIPELINE_DEPTH-1:1]	<= {PIPELINE_DEPTH-1{1'b0}};
-			
-			if ((enable_data_output) && (!fifo_data_valid)) begin
-				valid_buffer[0]		<= 1'b0;
-			end
-			else begin
-				valid_buffer[0]		<= 1'b1;
-			end
-			
-			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
-				valid_buffer[i]		<= valid_buffer[i-1];
-			end
-		end
-		else if ((flush_pipeline) || ((fifo_empty) && (input_index == PIPELINE_DEPTH-1))) begin
-			axis_buffer[0]	<= 0;
-			eof_buffer[0]	<= fifo_empty;
-			valid_buffer[0]	<= 1'b0;
-			
-			for (i = 1; i < PIPELINE_DEPTH; i = i + 1) begin
-				axis_buffer[i]	<= axis_buffer[i-1];
-				valid_buffer[i]	<= valid_buffer[i-1];
-				eof_buffer[i]	<= eof_buffer[i-1];
-			end
-		end
-		else if ((tvalid_out) && (!tready_in)) begin
-			if (input_index == PIPELINE_DEPTH-1) begin
-				input_index	<= input_index - 1;
-
-				if (input_index > 1) begin
-					eof_index	<= input_index - 2;
+		else begin
+			case (axis_access_state)
+				IDLE:
+				begin
+					output_counter		<= 0;
+					output_index		<= 0;
+					
+					if (enable_data_output) begin	// Expecting more data
+						current_count	<= input_counter;
+						tvalid_out		<= 1'b1;
+						tdata_out		<= shift_register[input_index];
+						tkeep_out		<= {TKEEP_SIZE{1'b1}};
+						tlast_out		<= eof_shift_register[input_index];
+						
+						if (tready_in) begin
+							output_counter		<= output_counter + 1;
+							output_index		<= input_index;
+						end
+						else begin
+							output_index		<= input_index + 1;
+						end
+						
+						if (eof_shift_register[0]) begin
+							axis_access_state	<= EMPTY_PIPELINE_DATA;
+						end
+						else begin
+							axis_access_state	<= TRANSMIT_DATA_STREAM;
+						end
+					end
+					else if (flush_pipeline) begin	// No more data going into shift register
+						current_count		<= input_counter;
+						tvalid_out			<= 1'b1;
+						tdata_out			<= shift_register[input_index];
+						tkeep_out			<= {TKEEP_SIZE{1'b1}};
+						tlast_out			<= eof_shift_register[input_index];
+						
+						if (tready_in) begin
+							output_counter		<= output_counter + 1;
+							
+							if (input_index > 0) begin
+								output_index		<= input_index - 1;
+							end
+							else begin
+								output_index		<= 0;
+							end
+						end
+						else begin
+							output_index		<= input_index + 1;
+						end
+						
+						axis_access_state	<= EMPTY_PIPELINE_DATA;
+					end
 				end
-			end
-		end
-		else if (push_pipeline) begin
-			if (input_index > 0) begin
-				input_index	<= input_index - 1;
-			
-				if (input_index > 1) begin
-					eof_index	<= input_index - 2;
+				TRANSMIT_DATA_STREAM:
+				begin
+					if (tready_in) begin
+						tvalid_out		<= 1'b1;
+						tdata_out		<= shift_register[output_index];
+						tkeep_out		<= {TKEEP_SIZE{1'b1}};
+						tlast_out		<= eof_shift_register[output_index];
+						output_counter	<= output_counter + 1;
+						current_count	<= input_counter;
+
+						if (fifo_empty) begin	// (eof_shift_register[0]) begin
+							if (output_index > 0) begin
+								output_index		<= output_index - 1;
+							end
+
+							axis_access_state	<= EMPTY_PIPELINE_DATA;
+						end
+					end
 				end
-			end
-		end
-		
-		if ((enable_data_output) || ((tready_in) && (valid_buffer[input_index] == 1'b1))) begin
-			tvalid_out		<= valid_buffer[input_index];
-			tdata_out		<= axis_buffer[input_index];
-			
-			if (input_counter < PIPELINE_DEPTH-1) begin
-				tlast_out		<= fifo_empty & ~fifo_data_valid;	// eof_buffer[input_index];
-			end
-			else begin
-				tlast_out		<= eof_buffer[eof_index];
-			end
-			
-			tkeep_out		<= {tkeep_data_size(DATA_SIZE){1'b1}};
-		end
-		else if (push_pipeline) begin
-			tvalid_out		<= valid_buffer[input_index];
-			tdata_out		<= axis_buffer[input_index];
-			tlast_out		<= eof_buffer[eof_index];
-			tkeep_out		<= {tkeep_data_size(DATA_SIZE){1'b1}};
-		end
-		else if (end_of_frame) begin
-			tvalid_out		<= 1'b0;
-			tdata_out		<= 0;
-			tlast_out		<= 1'b0;
-			tkeep_out		<= 0;
+				EMPTY_PIPELINE_DATA:
+				begin
+					if (tready_in) begin
+						if (!eof_shift_register[0]) begin
+							tvalid_out		<= 1'b1;
+							tdata_out		<= shift_register[output_index];
+							tkeep_out		<= {TKEEP_SIZE{1'b1}};
+							tlast_out		<= eof_shift_register[output_index];
+							output_counter	<= output_counter + 1;
+
+							if (output_index > 0) begin
+								output_index		<= output_index - 1;
+							end
+							else begin
+								axis_access_state	<= CLEAR_BUS_TRANSACTION;
+							end
+						end
+						else begin
+							if (output_counter == current_count) begin
+								tvalid_out			<= 1'b0;
+								tdata_out			<= 0;
+								tkeep_out			<= 0;
+								tlast_out			<= 1'b0;
+								axis_access_state	<= IDLE;
+							end
+							else begin
+								tvalid_out			<= 1'b1;
+								tdata_out			<= shift_register[output_index];
+								tkeep_out			<= {TKEEP_SIZE{1'b1}};
+								tlast_out			<= eof_shift_register[output_index];
+								output_counter		<= output_counter + 1;
+								
+								if (output_index > 0) begin
+									output_index		<= output_index - 1;
+								end
+								
+//								axis_access_state	<= CLEAR_BUS_TRANSACTION;
+							end
+						end
+					end
+				end
+				CLEAR_BUS_TRANSACTION:
+				begin
+					tvalid_out			<= 1'b0;
+					tdata_out			<= 0;
+					tkeep_out			<= 0;
+					tlast_out			<= 1'b0;
+					axis_access_state	<= IDLE;
+				end
+				default: axis_access_state	<= IDLE;
+			endcase
 		end
 	end
 endmodule

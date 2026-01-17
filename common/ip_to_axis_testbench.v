@@ -3,7 +3,7 @@
 module fifo_to_axis_testbench;
 
 	localparam BITS_PER_BEAT = 128;
-	localparam BEATS_PER_BURST = 128;
+	localparam BEATS_PER_BURST = 2;
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam CONTROL_DATA_SIZE = BYTES_PER_BEAT + 2;
 	localparam BACK_PRESSURE_DEPTH = 32;
@@ -92,8 +92,8 @@ module fifo_to_axis_testbench;
 	generic_fifo #(BACK_PRESSURE_DEPTH, BITS_PER_BEAT) data_memory (clock, reset, fifo_write_enable, fifo_data_in, fifo_read_enable, fifo_data_out, fifo_data_valid, fifo_data_empty, fifo_data_full);	
 	generic_fifo #(BACK_PRESSURE_DEPTH, (BITS_PER_BEAT/8)+2) control_memory (clock, reset, fifo_write_enable, fifo_control_in, fifo_read_enable, fifo_control_out, fifo_control_valid, fifo_control_empty, fifo_control_full);	
 			
-	fifo_to_axis #(BITS_PER_BEAT, 4) tdata_interface (reset, clock, fifo_read_enable, fifo_data_empty, fifo_data_full, fifo_data_out, fifo_data_valid, tready_in, data_valid_reg, data_reg, last_reg, keep_reg);
-	fifo_to_axis #(CONTROL_DATA_SIZE, 4) control_signal_interface (reset, clock, fifo_read_enable, fifo_control_empty, fifo_control_full, fifo_control_out, fifo_control_valid, tready_in, control_valid_reg, control_data_reg, control_last_reg, control_keep_reg);
+	fifo_to_axis #(BITS_PER_BEAT, 8, 1'b1) tdata_interface (reset, clock, fifo_read_enable, fifo_data_empty, fifo_data_full, fifo_data_out, fifo_data_valid, tready_in, data_valid_reg, data_reg, last_reg, keep_reg);
+	fifo_to_axis #(32, 8, 1'b0) control_signal_interface (reset, clock, fifo_read_enable, fifo_control_empty, fifo_control_full, fifo_control_out, fifo_control_valid, tready_in, control_valid_reg, control_data_reg, control_last_reg, control_keep_reg);
 
 	initial begin
 		clock = 1'b0;

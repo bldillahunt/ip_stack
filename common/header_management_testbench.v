@@ -3,15 +3,15 @@
 module header_management_testbench;
 
 	parameter ETH_BITS_PER_BEAT = 32;
-	parameter ETH_TOTAL_BYTE_COUNT = 2048;
+	parameter ETH_TOTAL_BYTE_COUNT = 16;
 	parameter ETH_HEADER_SIZE = 112;
 
 	parameter IP_BITS_PER_BEAT = 64;
-	parameter IP_TOTAL_BYTE_COUNT = 2048;
+	parameter IP_TOTAL_BYTE_COUNT = 16;
 	parameter IP_HEADER_SIZE = 160;
 
 	parameter UDP_BITS_PER_BEAT = 128;
-	parameter UDP_TOTAL_BYTE_COUNT = 2048;
+	parameter UDP_TOTAL_BYTE_COUNT = 16;
 	parameter UDP_HEADER_SIZE = 64;
 
 	reg clock;
