@@ -40,6 +40,7 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 	localparam TRANSMIT_EXTRA_BEAT = 8'h08;
 	localparam END_BUS_TRANSACTION = 8'h10;
 	localparam WAIT_FOR_END_OF_DATA = 8'h20;
+	localparam SAMPLE_HEADER_DATA = 8'h40;
 	
 	reg [7:0] header_insertion_state;
 	
@@ -339,12 +340,16 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 							
 							if (tvalid_in) begin
 								tready_out				<= 1'b0;
-								header_shift_register	<= header_data;
-								header_insertion_state	<= CAPTURE_HEADER;
+								header_insertion_state	<= SAMPLE_HEADER_DATA;
 							end
 							else begin
 								tready_out				<= 1'b0;
 							end
+						end
+						SAMPLE_HEADER_DATA:
+						begin
+							header_shift_register	<= header_data;
+							header_insertion_state	<= CAPTURE_HEADER;
 						end
 						CAPTURE_HEADER:
 						begin
@@ -360,7 +365,7 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 								else begin
 									tready_out				<= 1'b1;
 									fifo_write_enable		<= 1'b0;
-									fifo_data_in			<= tdata_in;
+									fifo_data_in			<= tdata_in;	// header_shift_register[BITS_PER_BEAT-1:0];
 									fifo_control_in			<= {tvalid_in, tlast_in, {30{1'b1}}};
 									header_insertion_state	<= STORE_REMAINING_DATA;
 								end
@@ -467,12 +472,16 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 							if (tvalid_in) begin
 								tready_out				<= 1'b0;
 								byte_counter			<= 0;
-								header_shift_register	<= header_data;
-								header_insertion_state	<= CAPTURE_HEADER;
+								header_insertion_state	<= SAMPLE_HEADER_DATA;
 							end
 							else begin
 								tready_out				<= 1'b0;
 							end
+						end
+						SAMPLE_HEADER_DATA:
+						begin
+							header_shift_register	<= header_data;
+							header_insertion_state	<= CAPTURE_HEADER;
 						end
 						CAPTURE_HEADER:
 						begin

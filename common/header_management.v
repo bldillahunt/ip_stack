@@ -909,7 +909,7 @@ module header_management (clock, reset);
 	endgenerate
 endmodule
 
-module byte_swap #(parameter WIDTH = 8) // Declare the parameter with a default value
+module byte_swap #(parameter WIDTH = 8)
 (
 	input wire [WIDTH-1:0] data_in,
 	output wire [WIDTH-1:0] data_out
