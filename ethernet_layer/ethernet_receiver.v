@@ -76,7 +76,7 @@ module ethernet_receiver (reset, clock, temac_rx_tvalid, temac_rx_tdata, temac_r
 	localparam [15:0] UNSUPPORTED_PROTOCOL = 16'h0080;
 	localparam [15:0] WAIT_FOR_TEMAC_READY_CLEAR = 16'h0100;
 	
-	reg [7:0] ethernet_receive_state;	
+	reg [15:0] ethernet_receive_state;	
 	reg clear_header_pending;	
 	reg enable_arp_interface;	
 	reg enable_ip_interface;	

@@ -111,7 +111,13 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								fifo_write_enable	<= 1'b0;
 								fifo_data_in		<= 0;
 								fifo_control_in		<= 0;
-								header_state		<= CAPTURE_HEADER;
+								
+								if (tlast_in) begin
+									header_state		<= WAIT_FOR_END_OF_DATA;
+								end
+								else begin
+									header_state		<= CAPTURE_HEADER;
+								end
 							end
 							else begin
 								tready_out			<= 1'b0;
@@ -213,7 +219,17 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								fifo_control_in		<= 0;
 								leftover_tdata		<= tdata_in[BITS_PER_BEAT-1:HEADER_SIZE];
 								leftover_tkeep		<= tkeep_in[BITS_PER_BEAT/8-1:BYTES_PER_HEADER];
-								header_state		<= CAPTURE_HEADER;
+
+								if (tlast_in) begin
+									fifo_write_enable	<= tvalid_in;
+									fifo_data_in		<= {{(BITS_PER_BEAT-HEADER_SIZE){1'b0}}, tdata_in[BITS_PER_BEAT-1:HEADER_SIZE]};
+									fifo_control_in		<= {{(BYTES_PER_BEAT-BYTES_PER_HEADER){1'b0}}, tkeep_in[BITS_PER_BEAT/8-1:BYTES_PER_HEADER]};
+									ipg_counter			<= 0;
+									header_state		<= WAIT_FOR_END_OF_DATA;
+								end
+								else begin
+									header_state		<= CAPTURE_HEADER;
+								end
 							end
 							else begin
 								tready_out			<= 1'b0;
@@ -222,11 +238,22 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 						CAPTURE_HEADER:
 						begin
 							if (tlast_in) begin
-								fifo_write_enable	<= tvalid_in;
-								fifo_data_in		<= {tdata_in[HEADER_SIZE-1:0], leftover_tdata};
-								fifo_control_in		<= {tvalid_in, 1'b1, tkeep_in[BYTES_PER_HEADER-1:0], leftover_tkeep};
-								ipg_counter			<= 0;
-								header_state		<= WAIT_FOR_END_OF_DATA;
+								if (tkeep_in[BYTES_PER_BEAT-1:BYTES_PER_HEADER] != {(BYTES_PER_BEAT-BYTES_PER_HEADER){1'b0}}) begin
+									fifo_write_enable	<= tvalid_in;
+									fifo_data_in		<= {tdata_in[HEADER_SIZE-1:0], leftover_tdata};
+									fifo_control_in		<= {tvalid_in, 1'b0, tkeep_in[BYTES_PER_HEADER-1:0], leftover_tkeep};
+									leftover_tdata		<= tdata_in[BITS_PER_BEAT-1:HEADER_SIZE];
+									leftover_tkeep		<= tkeep_in[BITS_PER_BEAT/8-1:BYTES_PER_HEADER];
+									ipg_counter			<= 0;
+									header_state		<= TRANSMIT_EXTRA_BEAT;
+								end
+								else begin
+									fifo_write_enable	<= tvalid_in;
+									fifo_data_in		<= {tdata_in[HEADER_SIZE-1:0], leftover_tdata};
+									fifo_control_in		<= {tvalid_in, 1'b1, tkeep_in[BYTES_PER_HEADER-1:0], leftover_tkeep};
+									ipg_counter			<= 0;
+									header_state		<= WAIT_FOR_END_OF_DATA;
+								end
 							end
 							else begin
 								header_data			<= tdata_in[HEADER_SIZE-1:0];
@@ -257,6 +284,15 @@ module header_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in, 
 								fifo_data_in		<= {tdata_in[HEADER_SIZE-1:0], leftover_tdata};
 								fifo_control_in		<= {tvalid_in, 1'b0, tkeep_in[BYTES_PER_HEADER-1:0], leftover_tkeep};
 							end
+						end
+						TRANSMIT_EXTRA_BEAT:
+						begin
+							tready_out			<= 1'b0;
+							fifo_write_enable	<= 1'b1;
+							fifo_data_in		<= {{(BITS_PER_BEAT-HEADER_SIZE){1'b0}}, leftover_tdata};
+							fifo_control_in		<= {tvalid_in, 1'b1, {KEEP_IN_TRUNCATED{1'b0}}, leftover_tkeep};
+							ipg_counter			<= 0;
+							header_state		<= WAIT_FOR_END_OF_DATA;
 						end
 						WAIT_FOR_END_OF_DATA:
 						begin

@@ -7,21 +7,6 @@ module ethernet_transmitter (reset, clock, source_mac_address, destination_mac_a
 
 	localparam DATA_WIDTH				= 8;							// The size of one octet
 	localparam BYTES_PER_BEAT			= BITS_PER_BEAT/DATA_WIDTH;		// The number of bytes to process on each clock cycle
-	localparam HEADER_BYTE_COUNT		= 14;
-	localparam BROADCAST_MAC_ADDRESS	= 48'hFFFFFFFFFFFF;
-	
-	localparam MAC_ADDRESS_BYTE_COUNT	= 6;
-	localparam MAC_SHIFT_COUNT			= MAC_ADDRESS_BYTE_COUNT/BYTES_PER_BEAT;
-	localparam MAC_ADDRESS_SIZE			= (DATA_WIDTH * MAC_ADDRESS_BYTE_COUNT);
-	localparam ETHER_TYPE_BYTE_COUNT	= 2;
-	localparam ETHER_TYPE_SIZE			= (DATA_WIDTH * ETHER_TYPE_BYTE_COUNT);
-	localparam ETHERNET_HEADER_SIZE		= (2*MAC_ADDRESS_SIZE + ETHER_TYPE_SIZE);
-	localparam ARP_HEADER_TYPE			= 16'h0806;
-	localparam IP_HEADER_TYPE			= 16'h0800;
-
-	// Local parameters
-	localparam INPUT_BUFFER_BYTE_COUNT = HEADER_BYTE_COUNT;
-	localparam INPUT_BUFFER_SIZE = DATA_WIDTH * INPUT_BUFFER_BYTE_COUNT;
 	
 	// I/O ports
 	input reset;
@@ -45,6 +30,22 @@ module ethernet_transmitter (reset, clock, source_mac_address, destination_mac_a
 	output reg temac_tx_tlast;
 	output [0:0] temac_tx_tuser;
 	output temac_tx_filter_tuser;
+
+	localparam HEADER_BYTE_COUNT		= 14;
+	localparam BROADCAST_MAC_ADDRESS	= 48'hFFFFFFFFFFFF;
+	
+	localparam MAC_ADDRESS_BYTE_COUNT	= 6;
+	localparam MAC_SHIFT_COUNT			= MAC_ADDRESS_BYTE_COUNT/BYTES_PER_BEAT;
+	localparam MAC_ADDRESS_SIZE			= (DATA_WIDTH * MAC_ADDRESS_BYTE_COUNT);
+	localparam ETHER_TYPE_BYTE_COUNT	= 2;
+	localparam ETHER_TYPE_SIZE			= (DATA_WIDTH * ETHER_TYPE_BYTE_COUNT);
+	localparam ETHERNET_HEADER_SIZE		= (2*MAC_ADDRESS_SIZE + ETHER_TYPE_SIZE);
+	localparam ARP_HEADER_TYPE			= 16'h0806;
+	localparam IP_HEADER_TYPE			= 16'h0800;
+
+	// Local parameters
+	localparam INPUT_BUFFER_BYTE_COUNT = HEADER_BYTE_COUNT;
+	localparam INPUT_BUFFER_SIZE = DATA_WIDTH * INPUT_BUFFER_BYTE_COUNT;
 
 	wire [ETHERNET_HEADER_SIZE-1:0] header_data;
 	reg [15:0] protocol_type;

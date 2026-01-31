@@ -219,14 +219,8 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 								tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT-1)-:BYTES_PER_HEADER];	// tkeep_in[BYTES_PER_HEADER-1:0];
 
 								if (tlast_in) begin
-									if (tkeep_in[BYTES_PER_BEAT-1:BYTES_PER_HEADER] != 0) begin
-										fifo_control_in			<= {tvalid_in, 1'b0, tkeep_in[BYTES_PER_BEAT-LEFTOVER_BYTES-1:0], tkeep_leftover};
-										header_insertion_state	<= TRANSMIT_EXTRA_BEAT;
-									end
-									else begin
-										fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in[BYTES_PER_BEAT-LEFTOVER_BYTES-1:0], tkeep_leftover};
-										header_insertion_state	<= END_BUS_TRANSACTION;
-									end
+									fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in[BYTES_PER_BEAT-LEFTOVER_BYTES-1:0], tkeep_leftover};
+									header_insertion_state	<= END_BUS_TRANSACTION;
 								end
 								else begin
 									fifo_control_in			<= {tvalid_in, tlast_in, tkeep_in[BYTES_PER_BEAT-LEFTOVER_BYTES-1:0], {BYTES_PER_HEADER{1'b1}}};
@@ -248,7 +242,7 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 								tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT-1)-:BYTES_PER_HEADER];
 
 								if (tlast_in) begin								
-									if (tkeep_in[BYTES_PER_BEAT-1:BYTES_PER_HEADER] != 0) begin
+									if (tkeep_in[(BYTES_PER_BEAT-1)-:BYTES_PER_HEADER] != 0) begin
 										fifo_control_in			<= {tvalid_in, 1'b0, tkeep_in[BYTES_PER_BEAT-LEFTOVER_BYTES-1:0], tkeep_leftover};
 										header_insertion_state	<= TRANSMIT_EXTRA_BEAT;
 									end
@@ -429,7 +423,7 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 			localparam real header_leftover_real_bytes = header_leftover_real/8;
 			localparam integer header_leftover_int = header_leftover_real;
 			localparam integer header_leftover_int_bytes = header_leftover_real_bytes;
-			localparam tdata_leftover_int = BITS_PER_BEAT - header_leftover_int;
+			localparam tdata_leftover_int = header_leftover_int;
 			localparam tkeep_leftover_int = tdata_leftover_int/8;
 			
 			reg [CONTROL_DATA_SIZE-1:0] fifo_control_in;
@@ -496,17 +490,17 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 									
 									fifo_write_enable		<= 1'b1;
 									fifo_data_in			<= header_shift_register[BITS_PER_BEAT-1:0];
-									fifo_control_in			<= {tvalid_in, tlast_in, {6{1'b1}}};
+									fifo_control_in			<= {tvalid_in, tlast_in, {(CONTROL_DATA_SIZE-2){1'b1}}};
 									byte_counter			<= byte_counter + BYTES_PER_BEAT;
 									header_shift_register	<= header_shift_register >> BITS_PER_BEAT;
 								end
 								else begin
 									tready_out				<= 1'b1;
 									fifo_write_enable		<= 1'b1;
-									fifo_data_in			<= {tdata_in[tdata_leftover_int-1:0], header_shift_register[header_leftover_int-1:0]};
-									fifo_control_in			<= {tvalid_in, tlast_in, {30{1'b1}}};
-									tdata_leftover			<= tdata_in[(BITS_PER_BEAT-1)-:header_leftover_int];
-									tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT-1)-:header_leftover_int_bytes];
+									fifo_data_in			<= {tdata_in[BITS_PER_BEAT-tdata_leftover_int-1:0], header_shift_register[tdata_leftover_int-1:0]};
+									fifo_control_in			<= {tvalid_in, tlast_in, {(CONTROL_DATA_SIZE-2){1'b1}}};
+									tdata_leftover			<= tdata_in[(BITS_PER_BEAT-1)-:tdata_leftover_int];
+									tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT)-:tkeep_leftover_int];
 									header_insertion_state	<= STORE_REMAINING_DATA;
 								end
 							end
@@ -517,22 +511,39 @@ module header_insertion (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in
 								fifo_write_enable		<= 1'b1;
 								
 								if (tlast_in) begin
-									tready_out				<= 1'b1;
-									fifo_data_in			<= {{tdata_leftover_int{1'b0}}, tdata_leftover};
-									fifo_control_in			<= {tvalid_in, tlast_in, {(30-header_leftover_int_bytes){1'b0}}, tkeep_leftover};
-									header_insertion_state	<= END_BUS_TRANSACTION;
+									if (tkeep_in[(BYTES_PER_BEAT-1)-:BYTES_PER_HEADER] == {BYTES_PER_HEADER{1'b0}}) begin
+										tready_out				<= 1'b1;
+										fifo_data_in			<= {{tdata_leftover_int{1'b0}}, tdata_leftover};
+										fifo_control_in			<= {tvalid_in, tlast_in, {(30-header_leftover_int_bytes){1'b0}}, tkeep_leftover};
+										header_insertion_state	<= END_BUS_TRANSACTION;
+									end
+									else begin
+										tready_out				<= 1'b1;
+										fifo_data_in			<= {tdata_in[tdata_leftover_int-1:0], tdata_leftover};
+										fifo_control_in			<= {tvalid_in, tlast_in, {30{1'b1}}};
+										tdata_leftover			<= tdata_in[(BITS_PER_BEAT-1)-:tdata_leftover_int];
+										tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT)-:tkeep_leftover_int];
+										header_insertion_state	<= TRANSMIT_EXTRA_BEAT;
+									end
 								end
 								else begin
 									fifo_data_in			<= {tdata_in[tdata_leftover_int-1:0], tdata_leftover};
 									fifo_control_in			<= {tvalid_in, tlast_in, {30{1'b1}}};
-									tdata_leftover			<= tdata_in[(BITS_PER_BEAT-1)-:header_leftover_int];
-									tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT-1)-:header_leftover_int_bytes];
+									tdata_leftover			<= tdata_in[(BITS_PER_BEAT-1)-:tdata_leftover_int];
+									tkeep_leftover			<= tkeep_in[(BYTES_PER_BEAT)-:tkeep_leftover_int];
 									tready_out				<= 1'b1;
 								end
 							end								
 							else begin
 								fifo_write_enable		<= 1'b0;
 							end
+						end
+						TRANSMIT_EXTRA_BEAT:
+						begin
+							fifo_write_enable		<= 1'b1;
+							fifo_data_in			<= {{(BITS_PER_BEAT-header_leftover_int){1'b0}}, tdata_leftover};
+							fifo_control_in			<= {1'b1, 1'b1, {((BITS_PER_BEAT-header_leftover_int)/8){1'b0}}, tkeep_leftover};
+							header_insertion_state	<= END_BUS_TRANSACTION;
 						end
 						END_BUS_TRANSACTION:
 						begin

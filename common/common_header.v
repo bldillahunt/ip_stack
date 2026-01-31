@@ -1,5 +1,6 @@
 `define TRUE = 1'b1;
 `define FALSE = 1'b0;
+`define ARP_HEADER_SIZE = 224;	// Number of bits
 
 module common_header (tkeep_size_in, tkeep_size_out);
 	input tkeep_size_in;
