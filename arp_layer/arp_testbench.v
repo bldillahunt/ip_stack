@@ -5,7 +5,7 @@ module arp_layer_testbench;
 
 	localparam ETH_HEADER_SIZE = 112;
 	localparam ARP_HEADER_SIZE = 224;
-	localparam BITS_PER_BEAT = 64;
+	localparam BITS_PER_BEAT = 512;
 	localparam PIPELINE_DEPTH = 32;
 	localparam BYTES_PER_BEAT = BITS_PER_BEAT/8;
 	localparam BROADCAST_MAC_ADDRESS = 48'hFFFFFFFFFFFF;

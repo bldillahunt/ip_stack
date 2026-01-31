@@ -233,6 +233,7 @@ module command_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in,
 			wire control_valid_reg;
 			wire control_last_reg;
 			wire [CONTROL_DATA_SIZE-1:0] control_data_reg;
+			reg data_output_enable;
 			
 			always @(posedge clock or reset) begin
 				if (reset) begin
@@ -243,6 +244,7 @@ module command_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in,
 					byte_counter			<= 0;
 					header_byte_counter		<= 0;
 					header_shift_register	<= 0;
+					data_output_enable		<= 1'b0;
 				end
 				else begin
 					header_data_valid		<= 1'b0;
@@ -255,10 +257,13 @@ module command_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in,
 							
 							if (tvalid_in) begin
 								tready_out			<= 1'b1;
+								data_output_enable	<= 1'b1;
 								
 								if (header_byte_counter < BYTES_PER_HEADER) begin
-									header_byte_counter		<= header_byte_counter + BYTES_PER_BEAT;
-									header_shift_register	<= {tdata_in, header_shift_register[HEADER_SIZE-1:BITS_PER_BEAT]};
+									if (data_output_enable) begin
+										header_byte_counter		<= header_byte_counter + BYTES_PER_BEAT;
+										header_shift_register	<= {tdata_in, header_shift_register[HEADER_SIZE-1:BITS_PER_BEAT]};
+									end
 								end
 								else begin
 									header_data				<= header_shift_register;
@@ -268,12 +273,22 @@ module command_capture (clock, reset, tready_out, tvalid_in, tdata_in, tlast_in,
 								end
 							end
 							else begin
-								tready_out			<= 1'b0;
+								if (header_byte_counter == BYTES_PER_HEADER) begin
+									header_data				<= header_shift_register;
+									header_data_valid		<= 1'b1;
+									ipg_counter				<= 0;
+									header_state			<= WAIT_FOR_END_OF_DATA;
+								end
+								else begin
+									tready_out			<= 1'b0;
+									data_output_enable	<= 1'b0;
+								end
 							end
 						end
 						WAIT_FOR_END_OF_DATA:
 						begin
 							tready_out			<= 1'b0;
+							data_output_enable	<= 1'b0;
 							ipg_counter			<= ipg_counter + 1;
 							
 							if (ipg_counter >= INTERPACKET_GAP) begin
