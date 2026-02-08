@@ -1,0 +1,5 @@
+`include "C:/Users/ambig/source/RTL/Verilog/IP_stack/common/global_parameters.vh"
+
+module ip_transmitter (reset, clock, icmp_tx_tready, icmp_tx_tvalid, icmp_tx_tdata, icmp_tx_tlast, icmp_tx_tkeep, udp_tx_tready, udp_tx_tvalid, udp_tx_tdata, udp_tx_tlast, udp_tx_tkeep, tcp_tx_tready, tcp_tx_tvalid, tcp_tx_tdata, tcp_tx_tlast, tcp_tx_tkeep);
+
+endmodule
