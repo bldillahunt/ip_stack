@@ -31,7 +31,7 @@ module axis_fifo_testbench;
 	reg clock;
 	reg reset;
 	
-	wire m_axis_tready;
+	reg m_axis_tready;
 	wire [TDATA_WIDTH-1:0] m_axis_tdata;
 	wire m_axis_tdest;
 	wire m_axis_tid;
@@ -57,6 +57,14 @@ module axis_fifo_testbench;
 	reg s_axis_tvalid;		
 	reg [31:0] next_prbs_pattern;
 	integer byte_counter;		
+	
+	// Verification registers
+	localparam [7:0] WAIT_FOR_DATA = 8'h01;
+	localparam [7:0] WAIT_FOR_END_OF_FRAME = 8'h02;
+	
+	reg [7:0] verification_state;
+	reg [31:0] prbs_verifier;
+	reg data_valid;
 
 	axi_stream_fifo #(TDATA_WIDTH,
 					  FIFO_DEPTH)
@@ -98,8 +106,6 @@ module axis_fifo_testbench;
 		#5 clock = ~clock;
 	end
 
-	assign m_axis_tready = m_axis_tvalid;
-	
 	always @(posedge clock or reset) begin
 		if (reset) begin
 			axis_fifo_state		<= IDLE;
@@ -118,7 +124,7 @@ module axis_fifo_testbench;
 			case (axis_fifo_state)
 				IDLE: 
 				begin
-					axis_fifo_state		<= START_DATA_GENERATION;
+					# 50 axis_fifo_state		<= START_DATA_GENERATION;
 				end
 				START_DATA_GENERATION:
 				begin
@@ -164,6 +170,49 @@ module axis_fifo_testbench;
 					#25 axis_fifo_state		<= IDLE;
 				end
 				default: axis_fifo_state		<= IDLE;
+			endcase
+		end
+	end
+	
+	always @(posedge clock or reset) begin
+		if (reset) begin
+			verification_state	<= WAIT_FOR_DATA;
+			prbs_verifier		<= 32'hFFFFFFFF;
+			m_axis_tready		<= 1'b0;
+			data_valid			<= 1'b0;
+		end
+		else begin
+			case (verification_state)
+				WAIT_FOR_DATA:
+				begin
+					if (m_axis_tvalid) begin
+						m_axis_tready		<= 1'b1;
+						verification_state	<= WAIT_FOR_END_OF_FRAME;
+					end
+					else begin
+						m_axis_tready		<= 1'b0;
+					end
+				end
+				WAIT_FOR_END_OF_FRAME:
+				begin
+					if (m_axis_tvalid) begin
+						m_axis_tready		<= 1'b1;
+						prbs_verifier		<= prbs_pattern_generator(1'b1, prbs_verifier);
+
+						if (m_axis_tdata == prbs_verifier) begin
+							data_valid		<= 1'b1;
+						end
+						else begin
+							data_valid		<= 1'b0;
+						end
+						
+						if (m_axis_tlast) begin
+							m_axis_tready		<= 1'b0;
+							verification_state	<= WAIT_FOR_DATA;
+						end
+					end
+				end
+				default: verification_state	<= WAIT_FOR_DATA;
 			endcase
 		end
 	end

@@ -99,7 +99,7 @@ module axi_stream_fifo (reset,
 		.TDEST_WIDTH(1), // DECIMAL
 		.TID_WIDTH(1), // DECIMAL
 		.TUSER_WIDTH(1), // DECIMAL
-		.USE_ADV_FEATURES("111111111111"), // String
+		.USE_ADV_FEATURES("1F1F"), // String
 		.WR_DATA_COUNT_WIDTH(DATA_COUNT) // DECIMAL
 	)
 	fifo_macro (
@@ -140,7 +140,7 @@ module axi_stream_fifo (reset,
 	always @ (posedge clock or reset) begin
 		if (reset) begin
 			fifo_full			<= 1'b0;
-			fifo_empty			<= 1'b0;
+			fifo_empty			<= 1'b1;
 			almost_empty_reg	<= 1'b0;
 			empty_pending		<= 1'b0;
 			clear_empty_pending	<= 1'b0;
@@ -151,14 +151,14 @@ module axi_stream_fifo (reset,
 		else begin
 			almost_empty_reg	<= almost_empty_axis;
 			
-			if (!almost_empty_reg && almost_empty_axis) begin
+			if (!almost_empty_reg && almost_empty_axis && m_axis_tvalid && m_axis_tready) begin
 				empty_pending		<= 1'b1;
 			end	
 			else if (clear_empty_pending) begin
 				empty_pending		<= 1'b0;
 			end
 			
-			if (empty_pending && m_axis_tvalid && m_axis_tready) begin
+			if (!almost_empty_reg && almost_empty_axis && m_axis_tvalid && m_axis_tready) begin
 				fifo_empty	<= 1'b1;
 			end
 			else if (s_axis_tvalid && s_axis_tready) begin
